@@ -15,18 +15,18 @@ The green sphere marks a valid floor hit. The small in-headset status label show
 
 ## Run on a desktop
 
-Install [Godot 4.6.3](https://godotengine.org/download/archive/) or another compatible 4.6 release, then run:
+From the repository root, run:
 
 ```sh
-godot --editor --path client
-godot --xr-mode off --path client
+./scripts/godot.sh --editor --path client
+./scripts/godot.sh --xr-mode off --path client
 ```
 
-On macOS, if Godot is an app bundle, replace `godot` with `/Applications/Godot.app/Contents/MacOS/Godot`. `--xr-mode off` prevents a desktop without an OpenXR runtime from waiting for a headset. For a nonvisual startup check:
+The launcher uses an existing Godot executable when available. On macOS, if none is installed, it downloads the pinned Godot 4.6.3 release into your user cache and verifies its SHA-256 checksum. On Linux, install a compatible Godot 4.6 release or set `WORLDSMITH_GODOT` to its executable. `--xr-mode off` prevents a desktop without an OpenXR runtime from waiting for a headset. For a nonvisual startup check:
 
 ```sh
-godot --headless --xr-mode off --path client --quit-after 2
-godot --headless --xr-mode off --path client --script res://tests/smoke.gd
+./scripts/godot.sh --headless --xr-mode off --path client --quit-after 2
+./scripts/godot.sh --headless --xr-mode off --path client --script res://tests/smoke.gd
 ```
 
 ## Deploy to Quest 3
@@ -39,7 +39,7 @@ After the preset is saved:
 
 ```sh
 mkdir -p build
-(cd client && godot --headless --export-debug "Quest 3" ../build/worldsmith.apk)
+(cd client && ../scripts/godot.sh --headless --export-debug "Quest 3" ../build/worldsmith.apk)
 adb install -r build/worldsmith.apk
 ```
 

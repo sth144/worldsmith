@@ -9,7 +9,7 @@ Use Godot 4.6.3. The project uses the Compatibility renderer because [Godot's Qu
 
    ```sh
    mkdir -p build
-   (cd client && godot --headless --export-debug "Quest 3" ../build/worldsmith.apk)
+   (cd client && ../scripts/godot.sh --headless --export-debug "Quest 3" ../build/worldsmith.apk)
    adb install -r build/worldsmith.apk
    ```
 

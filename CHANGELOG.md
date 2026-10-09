@@ -9,3 +9,4 @@
 - Desktop and in-headset status displays.
 - Quest export and development documentation.
 - A headless smoke check for scene import, desktop camera, and teleportable floor collision.
+- A repository launcher that finds Godot or fetches the pinned macOS editor when it is absent.
