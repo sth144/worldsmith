@@ -23,9 +23,11 @@ var mouse_yaw := 0.0
 var mouse_pitch := 0.0
 var xr_interface: XRInterface
 var x_was_pressed := false
+var preview_name := ""
 
 
 func _ready() -> void:
+	_load_preview_from_args()
 	xr_interface = XRServer.find_interface("OpenXR")
 	if OS.has_feature("android") and xr_interface:
 		if xr_interface.is_initialized() or xr_interface.initialize():
@@ -41,6 +43,71 @@ func _ready() -> void:
 	if not xr_active:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_update_status()
+
+
+func _load_preview_from_args() -> void:
+	if OS.get_cmdline_user_args().has("--no-preview"):
+		return
+	var glb_path := ""
+	var spawn := player.position
+	var config_path := "res://assets/local/preview.json"
+	if FileAccess.file_exists(config_path):
+		var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(config_path))
+		if parsed is Dictionary:
+			var config: Dictionary = parsed
+			glb_path = str(config.get("glb", ""))
+			var configured_spawn: Array = config.get("spawn", [])
+			if configured_spawn.size() == 3:
+				spawn = Vector3(float(configured_spawn[0]), float(configured_spawn[1]), float(configured_spawn[2]))
+	for argument in OS.get_cmdline_user_args():
+		if argument.begins_with("--preview-glb="):
+			glb_path = argument.trim_prefix("--preview-glb=")
+		elif argument.begins_with("--spawn="):
+			var values := argument.trim_prefix("--spawn=").split(",")
+			if values.size() == 3:
+				spawn = Vector3(values[0].to_float(), values[1].to_float(), values[2].to_float())
+	if glb_path.is_empty():
+		return
+	var packed: PackedScene = load(glb_path)
+	if packed == null:
+		push_error("Could not load preview GLB: " + glb_path)
+		return
+	$SampleHall.queue_free()
+	for name in ["Floor", "WestWall", "EastWall", "NorthWall", "SouthWall", "TableObstacle"]:
+		get_node(name).collision_layer = 0
+	var preview := packed.instantiate()
+	preview.name = "PreviewWorld"
+	add_child(preview)
+	var collision_count := 0
+	for mesh_node in preview.find_children("*", "MeshInstance3D", true, false):
+		var mesh_instance := mesh_node as MeshInstance3D
+		if mesh_instance.mesh == null:
+			continue
+		var node_name := mesh_instance.name.to_lower()
+		var walkable := _name_has_any(node_name, ["grid", "paving", "floor", "road", "deck"])
+		var solid := walkable or _name_has_any(node_name, ["wall", "door", "column", "pillar"])
+		if not solid:
+			continue
+		var shape := mesh_instance.mesh.create_trimesh_shape()
+		if shape == null:
+			continue
+		var body := StaticBody3D.new()
+		body.collision_layer = 1 if walkable else 2
+		mesh_instance.add_child(body)
+		var collision := CollisionShape3D.new()
+		collision.shape = shape
+		body.add_child(collision)
+		collision_count += 1
+	player.position = spawn
+	preview_name = glb_path.get_file()
+	print("Preview loaded: %s; %d collision meshes" % [preview_name, collision_count])
+
+
+func _name_has_any(value: String, words: Array[String]) -> bool:
+	for word in words:
+		if value.contains(word):
+			return true
+	return false
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -154,4 +221,5 @@ func _update_status() -> void:
 	if xr_active:
 		xr_status.text = "WORLDsmith | Right trigger: teleport | X: smooth %s" % ("ON" if smooth_locomotion else "OFF")
 	else:
-		status.text = "WORLDSMITH  •  M1 VIEWER\nWASD move  •  Mouse look  •  Hold right mouse to aim, release to teleport  •  Esc unlock mouse"
+		var title := preview_name if not preview_name.is_empty() else "M1 VIEWER"
+		status.text = "WORLDSMITH  •  %s\nWASD move  •  Mouse look  •  Hold right mouse to aim, release to teleport  •  Esc unlock mouse" % title

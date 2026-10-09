@@ -26,8 +26,22 @@ The launcher uses an existing Godot executable when available. On macOS, if none
 
 ```sh
 ./scripts/godot.sh --headless --xr-mode off --path client --quit-after 2
-./scripts/godot.sh --headless --xr-mode off --path client --script res://tests/smoke.gd
+./scripts/godot.sh --headless --xr-mode off --path client --script res://tests/smoke.gd -- --no-preview
 ```
+
+## Preview a Blender scene
+
+For a local `.blend` file, run:
+
+```sh
+./scripts/preview_blend.sh /path/to/scene.blend "-13,23.5,10"
+```
+
+The optional second argument is the player spawn in Godot `(X,Y,Z)` meters. Blender uses Z up; the GLB exporter maps `(Blender X,Y,Z)` to `(Godot X,Z,-Y)`. Choose a point on a walkable surface. The command exports renderable objects to `client/assets/local/`, imports the GLB, and starts desktop mode. It does not save or modify the `.blend`. The GLB and local preview setting are gitignored. Subsequent desktop runs use that preview; remove `client/assets/local/preview.json` to return to the sample hall.
+
+The preview builds basic collision from meshes named like `Grid`, `Paving`, `Floor`, `Road`, `Deck`, `Wall`, or `Door`. Other meshes remain visual only. Blender geometry-node instances and Blender-only shader nodes may not survive this GLB export. The [Blender glTF documentation](https://docs.blender.org/manual/en/5.1/addons/import_export/scene_gltf2.html) describes the supported mesh and material features.
+
+If you export the Quest APK while a local preview is active, the preview GLB and setting are included in that local build. A large Blender environment may need mesh and draw-call optimization before it can meet the Quest frame-rate target.
 
 ## Deploy to Quest 3
 

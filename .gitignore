@@ -3,3 +3,5 @@
 build/
 *.apk
 *.aab
+client/assets/local/
+client/tests/*.gd.uid

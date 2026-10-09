@@ -10,3 +10,4 @@
 - Quest export and development documentation.
 - A headless smoke check for scene import, desktop camera, and teleportable floor collision.
 - A repository launcher that finds Godot or fetches the pinned macOS editor when it is absent.
+- Local Blender-to-GLB preview with a configurable spawn and generated walkable collision.

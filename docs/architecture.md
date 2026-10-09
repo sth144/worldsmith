@@ -17,4 +17,6 @@ For persistence, objects will use stable UUIDs, meter units, Y-up positions, and
 
 ## M1 boundaries
 
-The sample collision layout is fixed. Imported GLBs render, but arbitrary imported meshes do not automatically acquire collision or teleport surfaces. Physical room movement is tracked by OpenXR; the `CharacterBody3D` collision currently governs stick/keyboard locomotion, not every possible real-world head movement. M1 has no asset browser, save format, server, or AI worker.
+The sample collision layout is fixed. Local previews derive approximate collision from object names; arbitrary meshes are not guaranteed to have usable collision or teleport surfaces. Physical room movement is tracked by OpenXR; the `CharacterBody3D` collision currently governs stick/keyboard locomotion, not every possible real-world head movement. M1 has no asset browser, save format, server, or AI worker.
+
+For local `.blend` previews, `scripts/preview_blend.sh` exports a GLB under the ignored `client/assets/local/` directory. The client loads that GLB and creates temporary collision meshes for floor and structural objects based on their names. The `.blend` is never changed. This is a development preview, not a native Blender round trip. Milestone 6 will export the edited scene to GLB for Blender import; preserving Blender-specific modifiers and collections would need a later operation-replay path into a copy of the source `.blend`.
