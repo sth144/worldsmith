@@ -1,0 +1,30 @@
+config_version=5
+
+[application]
+
+config/name="Worldsmith"
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.6", "GL Compatibility")
+config/description="In-world VR environment editor (Milestone 1 viewer)"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/default_filters/use_nearest_mipmap_filter=false
+environment/defaults/default_clear_color=Color(0.08, 0.12, 0.18, 1)
+
+[xr]
+
+openxr/enabled=true
+openxr/default_action_map="res://openxr_action_map.tres"
+shaders/enabled=true
+
+[physics]
+
+3d/default_gravity=9.8
