@@ -14,3 +14,4 @@
 - Daylight ambient fill for readable shadowed areas in imported environments.
 - Higher-fidelity local Blender previews with baked procedural colors, visible modifiers, and Geometry Nodes instances rendered through MultiMesh.
 - Desktop arrow-key movement and Shift sprinting; walkable merchant entrances with step-up handling and an open gate in the preview.
+- Contact shading and fill lights that separate flat architectural surfaces in the merchant preview.

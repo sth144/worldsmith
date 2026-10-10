@@ -104,9 +104,32 @@ func _load_preview_from_args() -> void:
 		collision.shape = shape
 		body.add_child(collision)
 		collision_count += 1
+	if glb_path.get_file() == "merchant.glb":
+		_add_merchant_fill_lights(preview)
 	player.position = spawn
 	preview_name = glb_path.get_file()
 	print("Preview loaded: %s; %d collision meshes" % [preview_name, collision_count])
+
+
+func _add_merchant_fill_lights(preview: Node3D) -> void:
+	# The imported GLB has no Blender interior lighting. Local lights reveal
+	# wall, stair, and floor junctions without changing its source materials.
+	var positions := [
+		Vector3(14.0, 25.8, 3.5),
+		Vector3(2.5, 25.8, 8.5),
+		Vector3(25.5, 25.8, 8.5),
+		Vector3(13.5, 25.8, 24.5),
+		Vector3(26.0, 25.8, 34.0),
+	]
+	for index in range(positions.size()):
+		var light := OmniLight3D.new()
+		light.name = "PreviewFill%d" % index
+		light.position = positions[index]
+		light.light_color = Color(1.0, 0.88, 0.72)
+		light.light_energy = 2.0
+		light.omni_range = 11.0
+		light.shadow_enabled = false
+		preview.add_child(light)
 
 
 func _load_preview_instances(preview: Node3D, manifest_path: String) -> void:

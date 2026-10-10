@@ -35,6 +35,9 @@ ambient_light_source = 2
 ambient_light_color = Color(0.68, 0.73, 0.8, 1)
 ambient_light_energy = 0.8
 ambient_light_sky_contribution = 0.0
+ssao_enabled = true
+ssao_radius = 1.2
+ssao_intensity = 1.7
 
 [node name="World" type="Node3D"]
 script = ExtResource("1_main")
@@ -48,6 +51,12 @@ environment = SubResource("Environment_daylight")
 rotation = Vector3(-0.7, -0.5, 0)
 light_energy = 1.0
 shadow_enabled = true
+
+[node name="InteriorFill" type="DirectionalLight3D" parent="."]
+rotation = Vector3(-0.35, 2.25, 0)
+light_color = Color(1, 0.93, 0.82, 1)
+light_energy = 0.75
+shadow_enabled = false
 
 [node name="Floor" type="StaticBody3D" parent="."]
 collision_layer = 1

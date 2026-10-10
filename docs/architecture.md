@@ -2,7 +2,7 @@
 
 ## Current vertical slice
 
-The M1 client imports a self-contained GLB for visuals and keeps simple Godot `StaticBody3D` shapes alongside it for movement and teleportation. The visual GLB is not modified at runtime. The player uses a `CharacterBody3D`; its `XROrigin3D` owns the tracked camera and two tracked controllers. Desktop mode uses a separate camera on the same body. The floor is on collision layer 1 for teleport rays, while walls and the table are on layer 2. The player collides with both.
+The M1 client imports a self-contained GLB for visuals and keeps simple Godot `StaticBody3D` shapes alongside it for movement and teleportation. The visual GLB is not modified at runtime. The player uses a `CharacterBody3D`; its `XROrigin3D` owns the tracked camera and two tracked controllers. Desktop mode uses a separate camera on the same body. The floor is on collision layer 1 for teleport rays, while walls and the table are on layer 2. The player collides with both. The Compatibility renderer uses screen-space ambient occlusion to define contact edges; one shadowless directional fill and merchant-specific shadowless interior lights make room geometry legible without modifying source assets. Quest frame rate with these effects needs device profiling.
 
 One world unit is one meter. Godot and glTF use Y up. The Blender generator takes Y-up coordinates and maps them to Blender's Z-up axes before GLB export. The sample asset is small and uses simple materials to keep the initial draw count modest. Quest performance and comfort still need device verification.
 
