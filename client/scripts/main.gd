@@ -18,6 +18,9 @@ const DEADZONE := 0.18
 @onready var target: MeshInstance3D = $TeleportTarget
 @onready var status: Label = $DesktopOverlay/Status
 @onready var xr_status: Label3D = $Player/XROrigin/XRCamera/XRStatus
+@onready var scene_editor: WorldsmithSceneEditor = $PlacedObjects
+@onready var edit_panel: WorldsmithEditPanel = $EditPanel
+@onready var placement_preview: Node3D = $PlacementPreview
 
 var xr_active := false
 var smooth_locomotion := true
@@ -28,10 +31,21 @@ var mouse_pitch := 0.0
 var xr_interface: XRInterface
 var x_was_pressed := false
 var preview_name := ""
+var selected_id := ""
+var placing_asset := ""
+var moving_id := ""
+var edit_valid := false
+var y_was_pressed := false
+var grip_was_pressed := false
+var trigger_was_pressed := false
+var selection_outline: MeshInstance3D
+var xr_pointer: MeshInstance3D
 
 
 func _ready() -> void:
 	_load_preview_from_args()
+	scene_editor.changed.connect(_on_scene_changed)
+	edit_panel.action_requested.connect(_on_edit_action)
 	xr_interface = XRServer.find_interface("OpenXR")
 	if OS.has_feature("android") and xr_interface:
 		if xr_interface.is_initialized() or xr_interface.initialize():
@@ -46,6 +60,9 @@ func _ready() -> void:
 	xr_status.visible = xr_active
 	if not xr_active:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	else:
+		_create_xr_pointer()
+	edit_panel.set_selection_name("")
 	_update_status()
 
 
@@ -189,12 +206,58 @@ func _unhandled_input(event: InputEvent) -> void:
 		desktop_camera.rotation.x = mouse_pitch
 		player.rotation.y = mouse_yaw
 	elif event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_TAB:
+			_toggle_inventory()
+			get_viewport().set_input_as_handled()
+			return
 		if event.keycode == KEY_ESCAPE:
-			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+			if _is_editing():
+				_cancel_edit()
+			elif edit_panel.is_open:
+				_set_inventory(false)
+			else:
+				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+			get_viewport().set_input_as_handled()
+			return
+		if edit_panel.is_open:
+			return
+		if event.ctrl_pressed or event.meta_pressed:
+			if event.keycode == KEY_Z:
+				_on_edit_action("redo" if event.shift_pressed else "undo")
+			elif event.keycode == KEY_Y:
+				_on_edit_action("redo")
+			elif event.keycode == KEY_D:
+				_on_edit_action("duplicate")
+			else:
+				return
+			get_viewport().set_input_as_handled()
+			return
+		match event.keycode:
+			KEY_G:
+				_on_edit_action("move")
+			KEY_R:
+				_on_edit_action("rotate_left" if event.shift_pressed else "rotate_right")
+			KEY_EQUAL:
+				_on_edit_action("grow")
+			KEY_MINUS:
+				_on_edit_action("shrink")
+			KEY_DELETE, KEY_BACKSPACE:
+				_on_edit_action("delete")
 	elif event is InputEventMouseButton:
+		if edit_panel.is_open:
+			return
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+			if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+				Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+			elif _is_editing():
+				_confirm_edit()
+			else:
+				_select_object(_object_under_ray())
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
+			if _is_editing():
+				if event.pressed:
+					_cancel_edit()
+				return
 			if not event.pressed and aiming and target.visible:
 				_teleport()
 			aiming = event.pressed
@@ -202,15 +265,19 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _physics_process(delta: float) -> void:
 	if xr_active:
+		_update_xr_panel_ray()
 		_process_xr_input()
 	else:
-		aiming = Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
+		aiming = Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) and not _is_editing() and not edit_panel.is_open
 		_process_desktop_look(delta)
 	_process_movement(delta)
+	_update_edit_preview()
 	_update_teleport_target()
 
 
 func _process_desktop_look(delta: float) -> void:
+	if edit_panel.is_open:
+		return
 	var yaw_input := float(Input.is_key_pressed(KEY_LEFT)) - float(Input.is_key_pressed(KEY_RIGHT))
 	var pitch_input := float(Input.is_key_pressed(KEY_UP)) - float(Input.is_key_pressed(KEY_DOWN))
 	if yaw_input == 0.0 and pitch_input == 0.0:
@@ -222,27 +289,50 @@ func _process_desktop_look(delta: float) -> void:
 
 
 func _process_xr_input() -> void:
+	var y_pressed := left_controller.is_button_pressed("by_button")
+	if y_pressed and not y_was_pressed:
+		_toggle_inventory()
+	y_was_pressed = y_pressed
 	var x_pressed := left_controller.is_button_pressed("ax_button")
 	if x_pressed and not x_was_pressed:
 		smooth_locomotion = not smooth_locomotion
 		_update_status()
 	x_was_pressed = x_pressed
+	var grip_pressed := right_controller.is_button_pressed("grip_click")
+	if grip_pressed and not grip_was_pressed and not edit_panel.is_open and not _is_editing():
+		var grabbed_id := _object_under_ray()
+		if not grabbed_id.is_empty():
+			_select_object(grabbed_id)
+		_begin_move()
+	elif not grip_pressed and grip_was_pressed and not moving_id.is_empty():
+		_confirm_edit()
+	grip_was_pressed = grip_pressed
 	var trigger_pressed := right_controller.is_button_pressed("trigger_click")
-	if trigger_pressed and not aiming:
-		aiming = true
-	elif not trigger_pressed and aiming:
-		if aiming and target.visible:
+	if trigger_pressed and not trigger_was_pressed:
+		if edit_panel.is_open:
+			edit_panel.activate_hovered()
+		elif not placing_asset.is_empty():
+			_confirm_edit()
+		elif moving_id.is_empty():
+			var hit_id := _object_under_ray()
+			if not hit_id.is_empty():
+				_select_object(hit_id)
+			else:
+				aiming = true
+	elif not trigger_pressed and trigger_was_pressed and aiming:
+		if target.visible:
 			_teleport()
 		aiming = false
+	trigger_was_pressed = trigger_pressed
 
 
 func _process_movement(delta: float) -> void:
 	var input_vector := Vector2.ZERO
-	if xr_active and smooth_locomotion:
+	if xr_active and smooth_locomotion and not edit_panel.is_open:
 		input_vector = left_controller.get_vector2("primary")
 		# OpenXR thumbstick Y is positive forward; Godot's camera looks down -Z.
 		input_vector.y = -input_vector.y
-	elif not xr_active:
+	elif not xr_active and not edit_panel.is_open:
 		input_vector = Vector2(
 			float(Input.is_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_A)),
 			float(Input.is_key_pressed(KEY_S)) - float(Input.is_key_pressed(KEY_W))
@@ -336,9 +426,292 @@ func _destination_is_clear(origin: Vector3) -> bool:
 	return get_world_3d().direct_space_state.intersect_shape(query, 1).is_empty()
 
 
+func _is_editing() -> bool:
+	return not placing_asset.is_empty() or not moving_id.is_empty()
+
+
+func _toggle_inventory() -> void:
+	_set_inventory(not edit_panel.is_open)
+
+
+func _set_inventory(value: bool) -> void:
+	if value and _is_editing():
+		_cancel_edit()
+	aiming = false
+	target.visible = false
+	edit_panel.set_open(value, xr_active, xr_camera if xr_active else desktop_camera)
+	_update_status()
+
+
+func _on_edit_action(action: String) -> void:
+	if action.begins_with("place:"):
+		_start_place(action.trim_prefix("place:"))
+		return
+	if action == "move":
+		_begin_move()
+		return
+	if _is_editing():
+		_cancel_edit()
+	match action:
+		"rotate_left":
+			_rotate_selected(-15.0)
+		"rotate_right":
+			_rotate_selected(15.0)
+		"grow":
+			_scale_selected(1.1)
+		"shrink":
+			_scale_selected(1.0 / 1.1)
+		"duplicate":
+			if not selected_id.is_empty():
+				var new_id := scene_editor.duplicate_object(selected_id)
+				if not new_id.is_empty():
+					_select_object(new_id)
+		"delete":
+			if not selected_id.is_empty():
+				scene_editor.delete_object(selected_id)
+				_select_object("")
+		"undo":
+			scene_editor.undo()
+		"redo":
+			scene_editor.redo()
+	_update_status()
+
+
+func _start_place(asset_key: String) -> void:
+	if scene_editor.asset_info(asset_key).is_empty():
+		return
+	if _is_editing():
+		_cancel_edit()
+	placing_asset = asset_key
+	_build_ghost(asset_key)
+	_set_inventory(false)
+	_update_status()
+
+
+func _begin_move() -> void:
+	if selected_id.is_empty() or _is_editing():
+		return
+	var selected := scene_editor.object_node(selected_id)
+	if selected == null:
+		return
+	moving_id = selected_id
+	_build_ghost(str(selected.get_meta("asset_key")))
+	placement_preview.transform = selected.transform
+	selected.visible = false
+	_set_inventory(false)
+	_update_status()
+
+
+func _build_ghost(asset_key: String) -> void:
+	for child in placement_preview.get_children():
+		child.free()
+	var packed := load(str(scene_editor.asset_info(asset_key)["path"])) as PackedScene
+	if packed == null:
+		push_error("Could not load placement preview for " + asset_key)
+		return
+	var visual := packed.instantiate()
+	placement_preview.add_child(visual)
+	for mesh_node in visual.find_children("*", "MeshInstance3D", true, false):
+		var mesh := mesh_node as MeshInstance3D
+		mesh.transparency = 0.42
+		mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	placement_preview.visible = false
+	edit_valid = false
+
+
+func _update_edit_preview() -> void:
+	if not _is_editing():
+		return
+	var ray := _edit_ray()
+	var query := PhysicsRayQueryParameters3D.create(ray["origin"], ray["origin"] + ray["direction"] * TELEPORT_RANGE, 3)
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	edit_valid = not hit.is_empty() and hit.normal.y > 0.45
+	placement_preview.visible = edit_valid
+	if edit_valid:
+		var next_transform := placement_preview.transform
+		next_transform.origin = hit.position
+		placement_preview.transform = next_transform
+
+
+func _confirm_edit() -> void:
+	if not edit_valid:
+		if not moving_id.is_empty():
+			_cancel_edit()
+		return
+	var next_transform := placement_preview.transform
+	if not placing_asset.is_empty():
+		var new_id := scene_editor.add_object(placing_asset, next_transform)
+		placing_asset = ""
+		_clear_ghost()
+		_select_object(new_id)
+	elif not moving_id.is_empty():
+		var moved := scene_editor.object_node(moving_id)
+		if moved != null:
+			moved.visible = true
+		scene_editor.set_object_transform(moving_id, next_transform)
+		moving_id = ""
+		_clear_ghost()
+		_refresh_selection()
+	_update_status()
+
+
+func _cancel_edit() -> void:
+	if not moving_id.is_empty():
+		var moved := scene_editor.object_node(moving_id)
+		if moved != null:
+			moved.visible = true
+	placing_asset = ""
+	moving_id = ""
+	_clear_ghost()
+	_update_status()
+
+
+func _clear_ghost() -> void:
+	placement_preview.visible = false
+	edit_valid = false
+	for child in placement_preview.get_children():
+		child.free()
+	placement_preview.transform = Transform3D.IDENTITY
+
+
+func _edit_ray() -> Dictionary:
+	var source: Node3D = right_controller if xr_active else desktop_camera
+	return {"origin": source.global_position, "direction": -source.global_basis.z.normalized()}
+
+
+func _object_under_ray() -> String:
+	var ray := _edit_ray()
+	var query := PhysicsRayQueryParameters3D.create(ray["origin"], ray["origin"] + ray["direction"] * TELEPORT_RANGE, 8)
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	return scene_editor.object_id_from_collider(hit.get("collider"))
+
+
+func _select_object(object_id: String) -> void:
+	selected_id = object_id
+	_refresh_selection()
+	_update_status()
+
+
+func _on_scene_changed() -> void:
+	if not selected_id.is_empty() and scene_editor.object_node(selected_id) == null:
+		selected_id = ""
+	_refresh_selection()
+	_update_status()
+
+
+func _refresh_selection() -> void:
+	if is_instance_valid(selection_outline):
+		selection_outline.queue_free()
+	selection_outline = null
+	var selected := scene_editor.object_node(selected_id)
+	var selection_name := ""
+	if selected != null:
+		var asset: Dictionary = scene_editor.asset_info(str(selected.get_meta("asset_key")))
+		selection_name = str(asset.get("label", "Object"))
+		selection_outline = _make_outline(asset["size"])
+		selected.add_child(selection_outline)
+	edit_panel.set_selection_name(selection_name)
+	edit_panel.refresh_actions(selected != null, not scene_editor.undo_stack.is_empty(), not scene_editor.redo_stack.is_empty())
+
+
+func _make_outline(size: Vector3) -> MeshInstance3D:
+	var margin := Vector3(0.03, 0.03, 0.03)
+	var low := Vector3(-size.x * 0.5, 0, -size.z * 0.5) - margin
+	var high := Vector3(size.x * 0.5, size.y, size.z * 0.5) + margin
+	var corners := [
+		Vector3(low.x, low.y, low.z), Vector3(high.x, low.y, low.z),
+		Vector3(high.x, low.y, high.z), Vector3(low.x, low.y, high.z),
+		Vector3(low.x, high.y, low.z), Vector3(high.x, high.y, low.z),
+		Vector3(high.x, high.y, high.z), Vector3(low.x, high.y, high.z),
+	]
+	var lines := ImmediateMesh.new()
+	lines.surface_begin(Mesh.PRIMITIVE_LINES)
+	for edge in [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]]:
+		lines.surface_add_vertex(corners[edge[0]])
+		lines.surface_add_vertex(corners[edge[1]])
+	lines.surface_end()
+	var outline := MeshInstance3D.new()
+	outline.name = "SelectionOutline"
+	outline.mesh = lines
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = Color(1.0, 0.85, 0.18)
+	material.no_depth_test = true
+	outline.material_override = material
+	outline.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return outline
+
+
+func _rotate_selected(degrees: float) -> void:
+	var selected := scene_editor.object_node(selected_id)
+	if selected == null:
+		return
+	var next_transform := selected.transform
+	next_transform.basis = Basis(Vector3.UP, deg_to_rad(degrees)) * next_transform.basis
+	scene_editor.set_object_transform(selected_id, next_transform)
+
+
+func _scale_selected(factor: float) -> void:
+	var selected := scene_editor.object_node(selected_id)
+	if selected == null:
+		return
+	var next_scale := selected.scale * factor
+	if next_scale.x < 0.25 or next_scale.x > 3.0:
+		return
+	var next_transform := selected.transform
+	next_transform.basis = next_transform.basis.scaled(Vector3.ONE * factor)
+	scene_editor.set_object_transform(selected_id, next_transform)
+
+
+func _create_xr_pointer() -> void:
+	xr_pointer = MeshInstance3D.new()
+	xr_pointer.name = "EditRay"
+	var beam := BoxMesh.new()
+	beam.size = Vector3(0.008, 0.008, 1.0)
+	xr_pointer.mesh = beam
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.albedo_color = Color(0.2, 0.95, 0.85)
+	material.no_depth_test = true
+	xr_pointer.material_override = material
+	xr_pointer.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	xr_pointer.visible = false
+	add_child(xr_pointer)
+
+
+func _update_xr_panel_ray() -> void:
+	if not is_instance_valid(xr_pointer):
+		return
+	var ray := _edit_ray()
+	var ray_end := Vector3.ZERO
+	if edit_panel.is_open:
+		if edit_panel.update_hover(ray["origin"], ray["direction"]):
+			ray_end = edit_panel.hover_point
+		else:
+			ray_end = ray["origin"] + ray["direction"] * 3.0
+	elif not _is_editing():
+		var query := PhysicsRayQueryParameters3D.create(ray["origin"], ray["origin"] + ray["direction"] * TELEPORT_RANGE, 8)
+		var hit := get_world_3d().direct_space_state.intersect_ray(query)
+		if not hit.is_empty():
+			ray_end = hit.position
+	if ray_end == Vector3.ZERO:
+		xr_pointer.visible = false
+		return
+	var between: Vector3 = ray_end - ray["origin"]
+	var up := Vector3.FORWARD if absf(between.normalized().dot(Vector3.UP)) > 0.95 else Vector3.UP
+	xr_pointer.global_transform = Transform3D(Basis.looking_at(between.normalized(), up).scaled(Vector3(1, 1, between.length())), ray["origin"] + between * 0.5)
+	xr_pointer.visible = true
+
+
 func _update_status() -> void:
+	var selected := scene_editor.object_node(selected_id)
+	var selected_name := "none"
+	if selected != null:
+		selected_name = str(scene_editor.asset_info(str(selected.get_meta("asset_key"))).get("label", "object"))
 	if xr_active:
-		xr_status.text = "WORLDsmith | Left stick: walk %s | X: toggle | Right trigger: teleport" % ("ON" if smooth_locomotion else "OFF")
+		var mode := "PLACE" if not placing_asset.is_empty() else ("MOVE" if not moving_id.is_empty() else "VIEW")
+		xr_status.text = "Worldsmith  •  %s  •  Selected: %s\nY inventory  •  Left stick walk %s  •  Right trigger select/place/teleport  •  Right grip grab" % [mode, selected_name, "ON" if smooth_locomotion else "OFF"]
 	else:
-		var title := preview_name if not preview_name.is_empty() else "M1 VIEWER"
-		status.text = "WORLDSMITH  •  %s\nWASD move  •  Arrows look  •  Shift faster  •  Mouse look  •  Right mouse teleport  •  Esc unlock mouse" % title
+		var title := preview_name if not preview_name.is_empty() else "SAMPLE HALL"
+		var mode := "Placing " + placing_asset if not placing_asset.is_empty() else ("Moving " + selected_name if not moving_id.is_empty() else "Selected: " + selected_name)
+		status.text = "WORLDSMITH  •  %s  •  %s\nTab inventory  •  Left click select/place  •  G move  •  R rotate  •  +/- scale  •  Delete remove\nCtrl/Cmd+D duplicate  •  Ctrl/Cmd+Z undo  •  Ctrl/Cmd+Y redo  •  Right mouse teleport/cancel  •  WASD move" % [title, mode]

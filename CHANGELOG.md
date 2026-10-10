@@ -4,6 +4,9 @@
 
 ### Added
 
+- Milestone 2 local object editing: a desktop inventory and spatial Quest inventory with four generated GLB props, floor placement preview, ray selection, move, rotate, scale, duplicate, delete, and undo/redo.
+- Stable UUIDs for placed objects and a dedicated selection collision layer; yellow selection outline and right-controller editing ray.
+- A headless desktop integration check covering placement, ray selection, transforms, duplication, deletion, and undo/redo.
 - Godot 4.6 OpenXR project with desktop fallback and a generated sample GLB hall.
 - Controller teleportation, optional smooth XR locomotion, desktop movement, and simple collision.
 - Desktop and in-headset status displays.

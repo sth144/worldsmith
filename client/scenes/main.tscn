@@ -1,7 +1,9 @@
-[gd_scene load_steps=11 format=3]
+[gd_scene load_steps=13 format=3]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
 [ext_resource type="PackedScene" path="res://assets/sample_hall.glb" id="2_hall"]
+[ext_resource type="Script" path="res://scripts/scene_editor.gd" id="3_editor"]
+[ext_resource type="Script" path="res://scripts/edit_panel.gd" id="4_panel"]
 
 [sub_resource type="BoxShape3D" id="BoxShape_floor"]
 size = Vector3(16, 0.2, 16)
@@ -137,12 +139,31 @@ visible = false
 mesh = SubResource("SphereMesh_target")
 surface_material_override/0 = SubResource("Material_target")
 
+[node name="PlacedObjects" type="Node3D" parent="."]
+script = ExtResource("3_editor")
+
+[node name="PlacementPreview" type="Node3D" parent="."]
+visible = false
+
+[node name="EditPanel" type="Node3D" parent="."]
+script = ExtResource("4_panel")
+
 [node name="DesktopOverlay" type="CanvasLayer" parent="."]
 
 [node name="Status" type="Label" parent="DesktopOverlay"]
 offset_left = 18.0
 offset_top = 18.0
-offset_right = 850.0
-offset_bottom = 120.0
-theme_override_font_sizes/font_size = 18
+offset_right = 1160.0
+offset_bottom = 130.0
+theme_override_font_sizes/font_size = 16
 text = "Worldsmith"
+
+[node name="Crosshair" type="Label" parent="DesktopOverlay"]
+offset_left = 624.0
+offset_top = 342.0
+offset_right = 656.0
+offset_bottom = 378.0
+theme_override_font_sizes/font_size = 28
+text = "+"
+horizontal_alignment = 1
+vertical_alignment = 1

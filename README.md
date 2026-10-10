@@ -1,6 +1,6 @@
 # Worldsmith
 
-Worldsmith is an open-source, self-hosted VR environment editor for Meta Quest 3. The intended experience is to edit an environment while standing inside it. This repository currently contains **Milestone 1: the scene viewer**. Object editing, persistence, a scene server, and AI editing are planned but are not implemented yet.
+Worldsmith is an open-source, self-hosted VR environment editor for Meta Quest 3. The intended experience is to edit an environment while standing inside it. This repository contains **Milestone 2: local in-world object editing**. Scene persistence, the server, and AI editing are planned for later milestones.
 
 ## Milestone 1
 
@@ -12,6 +12,17 @@ The Godot 4.6 client imports an original sample GLB hall, runs in desktop debug 
 | Quest 3 | The left thumbstick walks in the direction of your gaze immediately. X toggles walking on or off. The right controller trigger aims and teleports on release. Physical room movement remains available. |
 
 The green sphere marks a valid floor hit. The small in-headset status label shows the smooth locomotion setting.
+
+## Milestone 2: object editing
+
+Open the inventory, choose one of four sample assets, aim at a floor, and place it. A translucent preview shows the landing spot. Aim at a placed object to select it; the yellow outline marks your selection. The inventory also has Move, Rotate, Grow, Shrink, Duplicate, Delete, Undo, and Redo actions. Placement, transforms, and deletion are kept in a local undo stack. Objects have stable UUIDs for the future scene server.
+
+| Mode | Editing controls |
+| --- | --- |
+| Desktop | Tab opens the inventory. Click an asset, aim at a floor, then left click to place. Left click a placed object to select it. G moves the selection to a new floor point; left click confirms. R rotates 15°; Shift+R rotates the other way. `+` and `-` scale it. Delete removes it. Ctrl/Cmd+D duplicates, Ctrl/Cmd+Z undoes, and Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z redoes. Escape or right click cancels a placement or move. |
+| Quest 3 | Y opens the spatial inventory. Point the right controller at a row and press its trigger. Point at the floor and press the trigger to place. Point at an object and press the trigger to select it. Hold the right grip on an object to move it; release over a floor to place it. Select an object and use the inventory for rotation, scale, duplication, deletion, undo, and redo. |
+
+This milestone keeps edits in memory. Restarting the app clears them; persistent scenes arrive in Milestone 3. The Quest editing controls are implemented but await a headset check.
 
 ## Run on a desktop
 
@@ -27,6 +38,7 @@ The launcher uses an existing Godot executable when available. On macOS, if none
 ```sh
 ./scripts/godot.sh --headless --xr-mode off --path client --quit-after 2
 ./scripts/godot.sh --headless --xr-mode off --path client --script res://tests/smoke.gd -- --no-preview
+./scripts/godot.sh --headless --xr-mode off --path client --script res://tests/editing.gd -- --no-preview
 ```
 
 ## Preview a Blender scene
@@ -62,12 +74,13 @@ Launch **Worldsmith** from the Quest's app library. Godot's one-click deploy is 
 ## Project layout
 
 ```text
-client/                  Godot viewer and imported sample GLB
-scripts/generate_sample.py  Blender source for the sample GLB
-docs/                    design notes and deployment instructions
+client/                        Godot VR editor, scene, and committed GLBs
+scripts/generate_sample.py     Blender source for the sample hall
+scripts/generate_edit_assets.py Blender source for the four inventory props
+docs/                          design notes and deployment instructions
 ```
 
-The committed GLB can be regenerated with `blender --background --python scripts/generate_sample.py`. To inspect another GLB in this milestone, copy it into `client/assets/` and change the `SampleHall` external resource in `client/scenes/main.tscn`. Collision bodies are authored separately and need adjustment for a different environment.
+The committed GLBs can be regenerated with `blender --background --python scripts/generate_sample.py` and `blender --background --python scripts/generate_edit_assets.py`. To inspect another environment, use the local Blender preview command above. Collision bodies for arbitrary scenes may need adjustment.
 
 The roadmap and decisions are in [docs/architecture.md](docs/architecture.md). Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
