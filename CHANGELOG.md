@@ -17,3 +17,7 @@
 - Desktop arrow-key view control alongside WASD movement and mouse look.
 - Contact shading and fill lights that separate flat architectural surfaces in the merchant preview.
 - Walkable preview stair collision and step-up movement through the merchant's straight staircases to the upper floor.
+
+### Fixed
+
+- Enable Android ETC2/ASTC texture import so Godot 4.6.3 can export the Quest APK.

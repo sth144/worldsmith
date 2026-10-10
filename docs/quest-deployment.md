@@ -2,6 +2,19 @@
 
 Use Godot 4.6.3. The project uses the Compatibility renderer because [Godot's Quest guidance](https://docs.godotengine.org/en/4.6/tutorials/xr/deploying_to_android.html) recommends it for Android XR. Godot 4.6 bundles the Khronos OpenXR loader; the vendor plugin is optional for features outside this milestone.
 
+## Install a built APK
+
+If `build/worldsmith.apk` already exists, enable Developer Mode, connect the Quest with a USB-C data cable, and accept **Allow USB debugging** inside the headset. From the repository root, run:
+
+```sh
+"$HOME/Library/Android/sdk/platform-tools/adb" devices
+"$HOME/Library/Android/sdk/platform-tools/adb" install -r build/worldsmith.apk
+```
+
+The first command should list the Quest as `device`. Launch **Worldsmith** from **Library → Unknown Sources**. The current local build includes the merchant preview.
+
+## Build the APK again
+
 1. Install OpenJDK 17 and the Android SDK. In Godot on macOS, open **Godot → Editor Settings → Export → Android** and set the SDK and JDK paths. Install the matching Godot 4.6.3 export templates through **Editor → Manage Export Templates**.
 2. Enable Developer Mode on Quest 3 in the Meta Horizon phone app, connect via a USB-C data cable, accept the headset's USB debugging prompt, and confirm `"$HOME/Library/Android/sdk/platform-tools/adb" devices` lists it as `device`.
 3. Open `client/project.godot`. In **Project → Export**, confirm the checked-in `Quest 3` Android preset has **Runnable**, **OpenXR**, and **arm64** enabled. Configure a debug keystore if requested. The preset uses package name `org.worldsmith.viewer`.
