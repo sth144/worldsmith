@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import json
+import struct
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -36,3 +38,21 @@ def asset_path(project: Path, asset_id: str) -> Path:
     if not path.is_file():
         raise HTTPException(404, "Asset not found")
     return path
+
+
+def validate_glb(path: Path) -> None:
+    """Check the GLB container and require at least one mesh before registration."""
+    size = path.stat().st_size
+    with path.open("rb") as source:
+        header = source.read(20)
+        if len(header) != 20:
+            raise ValueError("GLB header is incomplete")
+        magic, version, declared, chunk_size, chunk_type = struct.unpack("<4sIIII", header)
+        if magic != b"glTF" or version != 2 or declared != size or chunk_type != 0x4E4F534A or chunk_size > size - 20:
+            raise ValueError("Invalid GLB container")
+        try:
+            document = json.loads(source.read(chunk_size))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ValueError("Invalid GLB JSON") from exc
+    if not document.get("meshes"):
+        raise ValueError("GLB has no meshes")

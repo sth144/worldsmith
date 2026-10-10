@@ -23,10 +23,19 @@ var history_length := 0
 var server_objects: Dictionary = {}
 var pending: Array[Dictionary] = []
 var last_error := ""
+var agent_busy := false
+var agent_request: HTTPRequest
+var downloading: Dictionary = {}
+var geometry_job_id := ""
+var geometry_summary := ""
 
 
 func _ready() -> void:
 	editor.operation_committed.connect(_on_local_operation)
+	agent_request = HTTPRequest.new()
+	agent_request.timeout = 100.0
+	add_child(agent_request)
+	agent_request.request_completed.connect(_on_agent_result)
 	disabled = OS.get_cmdline_user_args().has("--offline")
 	if disabled:
 		return
@@ -176,15 +185,64 @@ func _apply_delta(message: Dictionary) -> void:
 
 
 func _rebuild_local() -> void:
+	var available: Array = []
+	for value in server_objects.values():
+		var asset_key := str(value.get("asset", "")).get_file().get_basename()
+		if editor.asset_info(asset_key).is_empty():
+			_download_asset(asset_key)
+		if not editor.asset_info(asset_key).is_empty():
+			available.append(value)
 	var world := get_parent()
 	var selected: String = world.selected_id
-	editor.load_wire_objects(server_objects.values())
+	editor.load_wire_objects(available)
 	for item in pending:
 		editor.replay_operation(item["operation"])
 	if editor.object_node(selected) != null:
 		world._select_object(selected)
+	elif server_objects.has(selected):
+		# Keep selection while a new mesh version downloads.
+		world.selected_id = selected
 	else:
 		world._select_object("")
+
+
+func _download_asset(asset_key: String) -> void:
+	if downloading.has(asset_key) or not asset_key.begins_with("chair-v-") and not asset_key.begins_with("table-v-") and not asset_key.begins_with("planter-v-") and not asset_key.begins_with("lantern-v-"):
+		return
+	var cached := "user://assets/" + asset_key + ".glb"
+	if FileAccess.file_exists(cached):
+		editor.register_dynamic_asset(asset_key, cached)
+		return
+	var request := HTTPRequest.new()
+	request.timeout = 60.0
+	add_child(request)
+	downloading[asset_key] = request
+	request.request_completed.connect(_on_asset_downloaded.bind(asset_key, request))
+	var endpoint := server_url.replace("ws://", "http://").replace("wss://", "https://")
+	var error := request.request(endpoint + "/api/assets/" + asset_key + "?scene_id=" + scene_id)
+	if error != OK:
+		downloading.erase(asset_key)
+		request.queue_free()
+
+
+func _on_asset_downloaded(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray, asset_key: String, request: HTTPRequest) -> void:
+	downloading.erase(asset_key)
+	request.queue_free()
+	if result != HTTPRequest.RESULT_SUCCESS or code != 200 or body.size() < 20 or body.slice(0, 4).get_string_from_ascii() != "glTF":
+		last_error = "Could not download asset " + asset_key
+		status_changed.emit()
+		return
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://assets"))
+	var file_path := "user://assets/" + asset_key + ".glb"
+	var file := FileAccess.open(file_path, FileAccess.WRITE)
+	if file == null:
+		last_error = "Could not save asset " + asset_key
+		status_changed.emit()
+		return
+	file.store_buffer(body)
+	file.close()
+	editor.register_dynamic_asset(asset_key, file_path)
+	_rebuild_local()
 
 
 func _on_local_operation(operation: Dictionary) -> void:
@@ -218,6 +276,10 @@ func can_redo() -> bool:
 
 
 func status_text() -> String:
+	if agent_busy:
+		return "Blender working…" if not geometry_job_id.is_empty() else "AI working…"
+	if not geometry_job_id.is_empty():
+		return "Approve mesh: " + geometry_summary
 	if disabled:
 		return "Local only"
 	if not last_error.is_empty():
@@ -225,6 +287,69 @@ func status_text() -> String:
 	if online:
 		return "Saved r%d" % revision if pending.is_empty() else "Syncing %d edit(s)" % pending.size()
 	return "Offline — %d edit(s) queued" % pending.size()
+
+
+func request_agent(prompt: String, selected_ids: Array[String]) -> void:
+	if disabled or not online or agent_busy or not pending.is_empty():
+		last_error = "Connect and save edits before asking AI"
+		status_changed.emit()
+		return
+	var endpoint := server_url.replace("ws://", "http://").replace("wss://", "https://")
+	var payload := {"expected_revision": revision, "prompt": prompt, "selected_object_ids": selected_ids}
+	var error := agent_request.request(endpoint + "/api/scenes/" + scene_id + "/agent", ["Content-Type: application/json"], HTTPClient.METHOD_POST, JSON.stringify(payload))
+	if error != OK:
+		last_error = "Could not send AI request"
+	else:
+		agent_busy = true
+		last_error = ""
+	status_changed.emit()
+
+
+func _on_agent_result(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	agent_busy = false
+	var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
+	if result != HTTPRequest.RESULT_SUCCESS or code != 200:
+		last_error = str(parsed.get("detail", "AI request failed")) if parsed is Dictionary else "AI request failed"
+	else:
+		last_error = ""
+		if parsed is Dictionary and parsed.get("status") == "approval_required":
+			var job: Dictionary = parsed["job"]
+			geometry_job_id = str(job["id"])
+			geometry_summary = str(job["operation"])
+	status_changed.emit()
+
+
+func approve_geometry() -> void:
+	if geometry_job_id.is_empty() or agent_busy or not online:
+		last_error = "No pending mesh edit"
+		status_changed.emit()
+		return
+	var endpoint := server_url.replace("ws://", "http://").replace("wss://", "https://")
+	var request := HTTPRequest.new()
+	request.timeout = 130.0
+	add_child(request)
+	request.request_completed.connect(_on_geometry_result.bind(request))
+	var payload := JSON.stringify({"expected_revision": revision})
+	var error := request.request(endpoint + "/api/scenes/" + scene_id + "/geometry/" + geometry_job_id + "/approve", ["Content-Type: application/json"], HTTPClient.METHOD_POST, payload)
+	if error != OK:
+		last_error = "Could not start Blender"
+		request.queue_free()
+	else:
+		agent_busy = true
+	status_changed.emit()
+
+
+func _on_geometry_result(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray, request: HTTPRequest) -> void:
+	request.queue_free()
+	agent_busy = false
+	geometry_job_id = ""
+	geometry_summary = ""
+	if result != HTTPRequest.RESULT_SUCCESS or code != 200:
+		var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
+		last_error = str(parsed.get("detail", "Mesh edit failed")) if parsed is Dictionary else "Mesh edit failed"
+	else:
+		last_error = ""
+	status_changed.emit()
 
 
 func _new_request_id() -> String:

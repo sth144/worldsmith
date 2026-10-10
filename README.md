@@ -1,6 +1,6 @@
 # Worldsmith
 
-Worldsmith is an open-source, self-hosted VR environment editor for Meta Quest 3. The intended experience is to edit an environment while standing inside it. This repository contains **Milestone 3: persistent scene editing**. AI editing and complete scene export are planned for later milestones.
+Worldsmith is an open-source, self-hosted VR environment editor for Meta Quest 3. The intended experience is to edit an environment while standing inside it. The repository includes a desktop-testable M1–M6 vertical slice: viewing, object editing, persistence, natural-language operations, approved mesh changes, and portable GLB export. The new M4–M6 headset controls still need a Quest check.
 
 ## Milestone 1
 
@@ -40,6 +40,29 @@ Then start the desktop client with the command below. It connects to `ws://127.0
 For Quest, the server and headset must be on the same trusted Wi-Fi network. Find the computer's LAN IP, copy `client/server.example.json` to ignored `client/server.json`, and replace its example IP. Rebuild the APK so that configuration is included. The Android preset enables `INTERNET`. Do not expose this unauthenticated service outside a trusted LAN.
 
 Available endpoints include `GET /api/scenes/demo`, `POST /api/scenes`, `POST /api/scenes/demo/operations`, `GET /api/scenes/demo/history`, `POST /api/scenes/demo/undo`, `POST /api/scenes/demo/redo`, `GET /api/assets`, `GET /api/assets/chair`, and `WS /ws/scenes/demo`. `http://127.0.0.1:8765/docs` shows request schemas. Supported operations are add, delete, transform, visibility, material color, asset replacement, and duplication. All writes require the current revision. Runtime scene data under `data/` is gitignored, so personal edits are not pushed with source code.
+
+## Milestones 4–6: AI, geometry, and export
+
+Select a placed object and open the inventory. **Ask AI…** opens a text field on desktop or a controller-ray keyboard in the headset. Requests such as “make this chair twice as wide,” “paint it red,” “hide it,” and “duplicate it” use deterministic local planning. Other requests use the installed, authenticated Codex CLI with a read-only sandbox and structured JSON output. Those requests send the prompt and scene graph to Codex. The server checks proposed operations and object IDs, then commits through the same revision-checked scene store. An AI request waits until pending edits are saved; the client shows progress and errors without freezing rendering.
+
+“Round the corners,” “make this taller,” and “cut a doorway/opening” create **geometry proposals** for one selected placed object. The scene stays unchanged until you choose **Approve mesh edit** in the inventory. The server runs a fixed Blender script against a copy of that object's GLB, keeps the original asset, registers a versioned GLB, and replaces the scene reference. Undo restores the old asset. The client downloads new versions at runtime. This initial geometry worker uses fixed operations and does not execute arbitrary agent-written Python; geometry work is limited to the selected asset, and openings are centered automatically. Base-environment meshes are not individually selectable yet. The server and Blender run on the local computer; the Quest only receives resulting assets and scene deltas.
+
+The server registers the sample hall as its default base environment. To export your current local merchant preview instead, register its GLB and instance sidecars from the repo root:
+
+```sh
+uv run --project server python scripts/register_environment.py client/assets/local/merchant.glb
+```
+
+Registration copies the GLB and any Geometry Nodes instance data into ignored server data. It leaves `merchant.blend` untouched. Download the combined scene and its source manifest:
+
+```sh
+curl -o worldsmith-scene.glb http://127.0.0.1:8765/api/scenes/demo/export
+curl -o worldsmith-manifest.json http://127.0.0.1:8765/api/scenes/demo/manifest
+```
+
+The export includes the registered environment, all visible placed objects, versioned geometry, transforms, material-color overrides, and preview instance geometry. Blender can import the GLB. Export makes a portable copy; it does not edit or reconstruct the original `.blend` project. The imported scene may be large, especially with thousands of grass instances.
+
+The scene service is intentionally LAN-only and has no authentication. Run one Uvicorn worker. `blender` must be on `PATH` for mesh changes and export; Codex CLI is needed only for requests outside the direct planner's patterns. The fixed geometry worker copies inputs to a temporary work directory, starts Blender with factory settings and auto-execution disabled, and limits execution time. It does not provide a hardened operating-system sandbox for future generated scripts; arbitrary script generation stays disabled.
 
 ## Run on a desktop
 

@@ -4,6 +4,10 @@
 
 ### Added
 
+- Milestone 4 selected-object natural-language prompt on desktop and in VR, deterministic direct requests, and read-only Codex CLI planning with server-side proposal validation.
+- Milestone 5 explicit geometry approval, fixed Blender bevel/stretch/opening operations, versioned GLB assets, runtime downloads, and persistent undo for asset replacement.
+- Milestone 6 registered base-environment assets, source manifest, Blender-composed portable GLB export, and Geometry Nodes preview instance inclusion.
+- Backend geometry/export tests and a desktop AI-to-geometry integration check.
 - Milestone 3 FastAPI scene server with validated operations, revision conflicts, atomic JSON snapshots, persistent undo/redo history, asset retrieval, and WebSocket deltas.
 - Godot WebSocket sync with optimistic local edits, reconnect, queued in-session edits, and server reconciliation.
 - Demo project template, server API tests, and desktop client persistence/reconnect integration checks.

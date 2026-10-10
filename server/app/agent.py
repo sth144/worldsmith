@@ -1,0 +1,135 @@
+"""Constrained natural-language planner. The scene store remains the sole writer."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import re
+import shutil
+import tempfile
+from pathlib import Path
+from uuid import uuid4
+
+from fastapi import HTTPException
+
+from .scene import SceneError, apply_operation
+
+
+COLORS = {
+    "red": [0.85, 0.08, 0.06, 1], "green": [0.08, 0.7, 0.14, 1],
+    "blue": [0.08, 0.22, 0.9, 1], "yellow": [0.95, 0.78, 0.06, 1],
+    "white": [1, 1, 1, 1], "black": [0.025, 0.025, 0.025, 1],
+}
+def _operation_schema(properties: dict) -> dict:
+    return {"type": "object", "additionalProperties": False,
+            "properties": properties, "required": list(properties)}
+
+
+_string = {"type": "string"}
+_numbers = {"type": "array", "items": {"type": "number"}}
+SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["operations"],
+    "properties": {"operations": {"type": "array", "items": {"anyOf": [
+        _operation_schema({"type": {"type": "string", "enum": ["set_transform"]},
+                           "object_id": _string, "position": _numbers, "rotation": _numbers, "scale": _numbers}),
+        _operation_schema({"type": {"type": "string", "enum": ["set_visibility"]},
+                           "object_id": _string, "visible": {"type": "boolean"}}),
+        _operation_schema({"type": {"type": "string", "enum": ["set_material"]},
+                           "object_id": _string, "color": _numbers}),
+        _operation_schema({"type": {"type": "string", "enum": ["duplicate_object"]},
+                           "object_id": _string, "new_id": _string}),
+        _operation_schema({"type": {"type": "string", "enum": ["delete_object"]},
+                           "object_id": _string}),
+    ]}}},
+}
+
+
+def deterministic_plan(prompt: str, selected: list[dict]) -> list[dict] | None:
+    """Handle common direct requests locally, without a cloud round trip."""
+    words = prompt.lower()
+    if not selected:
+        return None
+    if ("duplicate" in words or "copy" in words) and not any(phrase in words for phrase in ("along", "row", "line", "across")):
+        return [{"type": "duplicate_object", "object_id": obj["id"], "new_id": str(uuid4())} for obj in selected]
+    if "hide" in words or "show" in words:
+        return [{"type": "set_visibility", "object_id": obj["id"], "visible": "show" in words} for obj in selected]
+    for name, color in COLORS.items():
+        if name in words and any(verb in words for verb in ("color", "colour", "make", "paint")):
+            return [{"type": "set_material", "object_id": obj["id"], "color": color} for obj in selected]
+    factor = None
+    if "twice" in words or "double" in words:
+        factor = 2.0
+    elif "half" in words or "halve" in words:
+        factor = 0.5
+    else:
+        match = re.search(r"(?:scale|grow|shrink|make).*?\b(\d+(?:\.\d+)?)\s*(?:times|x)\b", words)
+        if match:
+            factor = float(match.group(1))
+    if factor is not None and 0 < factor <= 10:
+        axes = [0, 1, 2]
+        if "wide" in words or "width" in words:
+            axes = [0]
+        elif "tall" in words or "height" in words:
+            axes = [1]
+        elif "deep" in words or "depth" in words:
+            axes = [2]
+        return [{"type": "set_transform", "object_id": obj["id"],
+                 "scale": [value * factor if index in axes else value for index, value in enumerate(obj["scale"])]}
+                for obj in selected]
+    return None
+
+
+async def codex_plan(prompt: str, selected: list[dict], scene: dict) -> list[dict]:
+    if shutil.which("codex") is None:
+        raise HTTPException(503, "Codex CLI is unavailable; try a direct scale, color, visibility, or duplicate request")
+    guidance = (
+        "You are a scene operation planner. Return JSON with only an operations array. "
+        "Allowed types: set_transform (object_id plus all position/rotation/scale arrays), "
+        "set_visibility (object_id, visible), set_material (object_id, color RGBA 0..1), "
+        "duplicate_object (object_id, new_id UUID), delete_object (object_id). "
+        "Use selected object IDs, or IDs created by preceding duplicate_object operations. "
+        "Preserve existing values when changing one axis. "
+        "Coordinates are meters, Y up. Never write files or execute code. "
+        "If the request cannot be expressed with these operations, return an empty array.\n"
+        + json.dumps({"request": prompt, "selected": selected, "scene": scene}, separators=(",", ":"))
+    )
+    with tempfile.TemporaryDirectory(prefix="worldsmith-agent-") as directory:
+        root = Path(directory)
+        schema_path, answer_path = root / "schema.json", root / "answer.json"
+        schema_path.write_text(json.dumps(SCHEMA))
+        process = await asyncio.create_subprocess_exec(
+            "codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--output-schema", str(schema_path),
+            "--output-last-message", str(answer_path), "-", cwd=root,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(process.communicate(guidance.encode()), timeout=90)
+        except TimeoutError as exc:
+            process.kill()
+            await process.communicate()
+            raise HTTPException(504, "AI request timed out") from exc
+        if process.returncode != 0 or not answer_path.is_file():
+            raise HTTPException(502, "Codex could not plan this edit: " + stderr.decode(errors="replace")[-300:])
+        try:
+            return json.loads(answer_path.read_text())["operations"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise HTTPException(502, "Codex returned invalid operations") from exc
+
+
+def validate_proposal(operations: list[dict], scene: dict, selected_ids: list[str], assets: set[str]) -> None:
+    if not isinstance(operations, list) or not 1 <= len(operations) <= 16:
+        raise HTTPException(422, "AI request produced no supported edit")
+    editable = set(selected_ids)
+    working = {obj["id"]: obj.copy() for obj in scene["objects"]}
+    try:
+        for operation in operations:
+            if not isinstance(operation, dict) or operation.get("type") not in {
+                "set_transform", "set_visibility", "set_material", "duplicate_object", "delete_object"
+            } or operation.get("object_id") not in editable:
+                raise SceneError("Agent may edit selected objects only")
+            apply_operation(working, operation, assets)
+            if operation["type"] == "duplicate_object":
+                editable.add(operation["new_id"])
+    except (SceneError, ValueError, TypeError) as exc:
+        raise HTTPException(422, f"AI proposal rejected: {exc}") from exc

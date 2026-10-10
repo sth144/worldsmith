@@ -1,10 +1,11 @@
-[gd_scene load_steps=14 format=3]
+[gd_scene load_steps=15 format=3]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
 [ext_resource type="PackedScene" path="res://assets/sample_hall.glb" id="2_hall"]
 [ext_resource type="Script" path="res://scripts/scene_editor.gd" id="3_editor"]
 [ext_resource type="Script" path="res://scripts/edit_panel.gd" id="4_panel"]
 [ext_resource type="Script" path="res://scripts/scene_sync.gd" id="5_sync"]
+[ext_resource type="Script" path="res://scripts/prompt_panel.gd" id="6_prompt"]
 
 [sub_resource type="BoxShape3D" id="BoxShape_floor"]
 size = Vector3(16, 0.2, 16)
@@ -148,6 +149,9 @@ visible = false
 
 [node name="EditPanel" type="Node3D" parent="."]
 script = ExtResource("4_panel")
+
+[node name="PromptPanel" type="Node3D" parent="."]
+script = ExtResource("6_prompt")
 
 [node name="SceneSync" type="Node" parent="."]
 script = ExtResource("5_sync")

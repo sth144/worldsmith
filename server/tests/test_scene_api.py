@@ -70,7 +70,7 @@ def test_websocket_delta_and_assets(tmp_path):
     client = TestClient(create_app(tmp_path / "projects"))
     object_id = str(uuid4())
     assets = client.get("/api/assets").json()
-    assert {item["id"] for item in assets} == {"chair", "table", "planter", "lantern"}
+    assert {item["id"] for item in assets} == {"chair", "table", "planter", "lantern", "environment"}
     assert client.get("/api/assets/chair").content[:4] == b"glTF"
     assert client.get("/api/assets/../scene.json").status_code in (400, 404)
     with client.websocket_connect("/ws/scenes/demo") as first:

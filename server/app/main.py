@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,10 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .assets import asset_path, list_assets
+from .agent import codex_plan, deterministic_plan, validate_proposal
+from .export import export_scene, source_manifest
+from .geometry import create_proposal, interpret_geometry, read_job, run_geometry
+from .history import write_json
 from .history import history_status
 from .storage import SceneStore
 from .websocket import Connections
@@ -31,11 +36,17 @@ class RevisionRequest(BaseModel):
     expected_revision: int = Field(ge=0)
 
 
+class AgentRequest(BaseModel):
+    expected_revision: int = Field(ge=0)
+    prompt: str = Field(min_length=3, max_length=1000)
+    selected_object_ids: list[str] = Field(min_length=1, max_length=16)
+
+
 def create_app(data_dir: Path | None = None) -> FastAPI:
     root = data_dir or Path(os.environ.get("WORLDSMITH_DATA_DIR", REPO / "data")) / "projects"
     store = SceneStore(root, REPO / "projects" / "demo")
     connections = Connections()
-    app = FastAPI(title="Worldsmith Scene Server", version="0.3.0")
+    app = FastAPI(title="Worldsmith Scene Server", version="0.6.0")
     app.state.store = store
 
     @app.get("/api/scenes/{scene_id}")
@@ -51,6 +62,68 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         result = store.apply(scene_id, body.expected_revision, body.operations)
         await connections.broadcast(scene_id, {"type": "delta", **result})
         return result
+
+    @app.post("/api/scenes/{scene_id}/agent")
+    async def agent_edit(scene_id: str, body: AgentRequest) -> dict:
+        scene, _ = store.read(scene_id)
+        if scene["revision"] != body.expected_revision:
+            raise HTTPException(409, {"message": "Scene revision conflict", "current_revision": scene["revision"]})
+        by_id = {obj["id"]: obj for obj in scene["objects"]}
+        if len(set(body.selected_object_ids)) != len(body.selected_object_ids) or any(
+            object_id not in by_id for object_id in body.selected_object_ids
+        ):
+            raise HTTPException(422, "Select existing objects")
+        selected = [by_id[object_id] for object_id in body.selected_object_ids]
+        operations = deterministic_plan(body.prompt, selected)
+        if operations is None:
+            geometry_spec = interpret_geometry(body.prompt)
+            if geometry_spec is not None:
+                if len(selected) != 1:
+                    raise HTTPException(422, "Select one object for a geometry edit")
+                job = create_proposal(store.project(scene_id), scene, selected[0]["id"], body.prompt, geometry_spec)
+                return {"status": "approval_required", "job": job}
+            operations = await codex_plan(body.prompt, selected, scene)
+        assets = {item["path"] for item in list_assets(store.project(scene_id))}
+        validate_proposal(operations, scene, body.selected_object_ids, assets)
+        result = store.apply(scene_id, body.expected_revision, operations)
+        await connections.broadcast(scene_id, {"type": "delta", **result})
+        return {"operations": operations, **result}
+
+    @app.get("/api/scenes/{scene_id}/geometry/{job_id}")
+    def get_geometry_job(scene_id: str, job_id: str) -> dict:
+        store.read(scene_id)
+        return read_job(store.project(scene_id), job_id)
+
+    @app.post("/api/scenes/{scene_id}/geometry/{job_id}/approve")
+    async def approve_geometry(scene_id: str, job_id: str, body: RevisionRequest) -> dict:
+        project = store.project(scene_id)
+        with store.lock:
+            scene, _ = store.read(scene_id)
+            job = read_job(project, job_id)
+            if job["scene_id"] != scene_id or job["status"] != "approval_required":
+                raise HTTPException(422, "Job is not waiting for approval")
+            if scene["revision"] != body.expected_revision or scene["revision"] != job["revision"]:
+                raise HTTPException(409, "Scene changed since geometry was proposed; request it again")
+            obj = next((item for item in scene["objects"] if item["id"] == job["object_id"]), None)
+            if obj is None or obj["asset"] != job["source_asset"]:
+                raise HTTPException(409, "Selected asset changed since geometry was proposed")
+            job["status"] = "running"
+            write_json(project / "jobs" / f"{job_id}.json", job)
+        try:
+            new_asset = await asyncio.to_thread(run_geometry, project, job)
+            result = store.apply(scene_id, body.expected_revision, [{
+                "type": "replace_asset", "object_id": job["object_id"], "asset": new_asset,
+            }])
+        except HTTPException as exc:
+            job["status"] = "failed"
+            job["error"] = str(exc.detail)
+            write_json(project / "jobs" / f"{job_id}.json", job)
+            raise
+        job["status"] = "complete"
+        job["result_asset"] = new_asset
+        write_json(project / "jobs" / f"{job_id}.json", job)
+        await connections.broadcast(scene_id, {"type": "delta", **result})
+        return {"job": job, **result}
 
     @app.post("/api/scenes/{scene_id}/undo")
     async def undo(scene_id: str, body: RevisionRequest) -> dict:
@@ -78,6 +151,17 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     def get_asset(asset_id: str, scene_id: str = "demo") -> FileResponse:
         store.read(scene_id)
         return FileResponse(asset_path(store.project(scene_id), asset_id), media_type="model/gltf-binary")
+
+    @app.get("/api/scenes/{scene_id}/manifest")
+    def get_manifest(scene_id: str) -> dict:
+        scene, _ = store.read(scene_id)
+        return source_manifest(store.project(scene_id), scene)
+
+    @app.get("/api/scenes/{scene_id}/export")
+    async def get_export(scene_id: str) -> FileResponse:
+        scene, _ = store.read(scene_id)
+        output, _ = await asyncio.to_thread(export_scene, store.project(scene_id), scene)
+        return FileResponse(output, media_type="model/gltf-binary", filename=output.name)
 
     @app.websocket("/ws/scenes/{scene_id}")
     async def scene_socket(socket: WebSocket, scene_id: str) -> None:

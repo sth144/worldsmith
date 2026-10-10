@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import threading
 from copy import deepcopy
@@ -16,6 +17,8 @@ from .assets import list_assets, valid_scene_id
 from .history import history_status, replay, write_json
 from .scene import SceneDocument, SceneError, apply_operation
 
+REPO = Path(__file__).resolve().parents[2]
+
 
 class SceneStore:
     def __init__(self, root: Path, seed: Path):
@@ -25,6 +28,19 @@ class SceneStore:
         self.root.mkdir(parents=True, exist_ok=True)
         if not (self.root / "demo" / "scene.json").exists():
             shutil.copytree(self.seed, self.root / "demo", dirs_exist_ok=True)
+        self._ensure_environment(self.root / "demo")
+
+    @staticmethod
+    def _ensure_environment(project: Path) -> None:
+        manifest = project / "environment.json"
+        if manifest.exists():
+            return
+        source = REPO / "client" / "assets" / "sample_hall.glb"
+        destination = project / "assets" / "environment.glb"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not destination.exists():
+            shutil.copy2(source, destination)
+        write_json(manifest, {"asset": "assets/environment.glb", "source": "sample_hall.glb"})
 
     def project(self, scene_id: str) -> Path:
         return self.root / valid_scene_id(scene_id)
@@ -40,6 +56,7 @@ class SceneStore:
                 shutil.copy2(asset, project / "assets" / asset.name)
             scene = SceneDocument(scene_id=scene_id, revision=0).model_dump()
             write_json(project / "scene.json", scene)
+            self._ensure_environment(project)
             return scene
 
     def _load(self, scene_id: str) -> tuple[dict, dict]:

@@ -8,6 +8,8 @@ const ASSET_ROWS := [
 	{"action": "place:table", "label": "Table"},
 	{"action": "place:planter", "label": "Planter"},
 	{"action": "place:lantern", "label": "Lantern"},
+	{"action": "ask_ai", "label": "Ask AI…"},
+	{"action": "approve_geometry", "label": "Approve mesh edit"},
 ]
 const EDIT_ROWS := [
 	{"action": "move", "label": "Move / grab"},

@@ -17,10 +17,32 @@ var objects: Dictionary = {}
 var undo_stack: Array[Dictionary] = []
 var redo_stack: Array[Dictionary] = []
 var suppress_commits := false
+var dynamic_assets: Dictionary = {}
 
 
 func asset_info(asset_key: String) -> Dictionary:
-	return CATALOG.get(asset_key, {})
+	return dynamic_assets.get(asset_key, CATALOG.get(asset_key, {}))
+
+
+func register_dynamic_asset(asset_key: String, file_path: String) -> void:
+	var source_key := asset_key.split("-v-")[0]
+	var source: Dictionary = CATALOG.get(source_key, {})
+	dynamic_assets[asset_key] = {"label": asset_key, "path": file_path, "size": source.get("size", Vector3.ONE)}
+
+
+func instantiate_asset(asset_key: String) -> Node3D:
+	var info := asset_info(asset_key)
+	if info.is_empty():
+		return null
+	var path := str(info["path"])
+	if not path.begins_with("res://"):
+		var document := GLTFDocument.new()
+		var state := GLTFState.new()
+		if document.append_from_file(path, state) != OK:
+			return null
+		return document.generate_scene(state)
+	var packed := load(path) as PackedScene
+	return packed.instantiate() if packed != null else null
 
 
 func object_node(object_id: String) -> StaticBody3D:
@@ -248,8 +270,8 @@ func _apply_state(object_id: String, state: Dictionary) -> void:
 	if asset.is_empty():
 		push_error("Unknown catalog asset: " + str(state["asset"]))
 		return
-	var packed := load(str(asset["path"])) as PackedScene
-	if packed == null:
+	var visual := instantiate_asset(str(state["asset"]))
+	if visual == null:
 		push_error("Could not load catalog asset: " + str(asset["path"]))
 		return
 	var body := StaticBody3D.new()
@@ -261,7 +283,6 @@ func _apply_state(object_id: String, state: Dictionary) -> void:
 	body.set_meta("asset_key", state["asset"])
 	body.set_meta("scene_data", state.get("data", {}))
 	add_child(body)
-	var visual := packed.instantiate()
 	visual.name = "Visual"
 	body.add_child(visual)
 	var collision := CollisionShape3D.new()

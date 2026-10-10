@@ -20,6 +20,7 @@ const DEADZONE := 0.18
 @onready var xr_status: Label3D = $Player/XROrigin/XRCamera/XRStatus
 @onready var scene_editor: WorldsmithSceneEditor = $PlacedObjects
 @onready var edit_panel: WorldsmithEditPanel = $EditPanel
+@onready var prompt_panel: WorldsmithPromptPanel = $PromptPanel
 @onready var placement_preview: Node3D = $PlacementPreview
 @onready var scene_sync: WorldsmithSceneSync = $SceneSync
 
@@ -47,6 +48,7 @@ func _ready() -> void:
 	_load_preview_from_args()
 	scene_editor.changed.connect(_on_scene_changed)
 	edit_panel.action_requested.connect(_on_edit_action)
+	prompt_panel.submitted.connect(_on_prompt_submitted)
 	scene_sync.status_changed.connect(_update_status)
 	xr_interface = XRServer.find_interface("OpenXR")
 	if OS.has_feature("android") and xr_interface:
@@ -202,6 +204,11 @@ func _name_has_any(value: String, words: Array[String]) -> bool:
 func _unhandled_input(event: InputEvent) -> void:
 	if xr_active:
 		return
+	if prompt_panel.is_open:
+		if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+			prompt_panel.close()
+			get_viewport().set_input_as_handled()
+		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		mouse_yaw -= event.relative.x * MOUSE_SENSITIVITY
 		mouse_pitch = clampf(mouse_pitch - event.relative.y * MOUSE_SENSITIVITY, -1.45, 1.45)
@@ -278,7 +285,7 @@ func _physics_process(delta: float) -> void:
 
 
 func _process_desktop_look(delta: float) -> void:
-	if edit_panel.is_open:
+	if edit_panel.is_open or prompt_panel.is_open:
 		return
 	var yaw_input := float(Input.is_key_pressed(KEY_LEFT)) - float(Input.is_key_pressed(KEY_RIGHT))
 	var pitch_input := float(Input.is_key_pressed(KEY_UP)) - float(Input.is_key_pressed(KEY_DOWN))
@@ -292,7 +299,7 @@ func _process_desktop_look(delta: float) -> void:
 
 func _process_xr_input() -> void:
 	var y_pressed := left_controller.is_button_pressed("by_button")
-	if y_pressed and not y_was_pressed:
+	if y_pressed and not y_was_pressed and not prompt_panel.is_open:
 		_toggle_inventory()
 	y_was_pressed = y_pressed
 	var x_pressed := left_controller.is_button_pressed("ax_button")
@@ -301,7 +308,7 @@ func _process_xr_input() -> void:
 		_update_status()
 	x_was_pressed = x_pressed
 	var grip_pressed := right_controller.is_button_pressed("grip_click")
-	if grip_pressed and not grip_was_pressed and not edit_panel.is_open and not _is_editing():
+	if grip_pressed and not grip_was_pressed and not edit_panel.is_open and not prompt_panel.is_open and not _is_editing():
 		var grabbed_id := _object_under_ray()
 		if not grabbed_id.is_empty():
 			_select_object(grabbed_id)
@@ -311,7 +318,9 @@ func _process_xr_input() -> void:
 	grip_was_pressed = grip_pressed
 	var trigger_pressed := right_controller.is_button_pressed("trigger_click")
 	if trigger_pressed and not trigger_was_pressed:
-		if edit_panel.is_open:
+		if prompt_panel.is_open:
+			prompt_panel.activate_hovered()
+		elif edit_panel.is_open:
 			edit_panel.activate_hovered()
 		elif not placing_asset.is_empty():
 			_confirm_edit()
@@ -330,11 +339,11 @@ func _process_xr_input() -> void:
 
 func _process_movement(delta: float) -> void:
 	var input_vector := Vector2.ZERO
-	if xr_active and smooth_locomotion and not edit_panel.is_open:
+	if xr_active and smooth_locomotion and not edit_panel.is_open and not prompt_panel.is_open:
 		input_vector = left_controller.get_vector2("primary")
 		# OpenXR thumbstick Y is positive forward; Godot's camera looks down -Z.
 		input_vector.y = -input_vector.y
-	elif not xr_active and not edit_panel.is_open:
+	elif not xr_active and not edit_panel.is_open and not prompt_panel.is_open:
 		input_vector = Vector2(
 			float(Input.is_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_A)),
 			float(Input.is_key_pressed(KEY_S)) - float(Input.is_key_pressed(KEY_W))
@@ -446,6 +455,16 @@ func _set_inventory(value: bool) -> void:
 
 
 func _on_edit_action(action: String) -> void:
+	if action == "approve_geometry":
+		scene_sync.approve_geometry()
+		_set_inventory(false)
+		return
+	if action == "ask_ai":
+		if selected_id.is_empty():
+			return
+		_set_inventory(false)
+		prompt_panel.open(xr_active, xr_camera if xr_active else desktop_camera)
+		return
 	if action.begins_with("place:"):
 		_start_place(action.trim_prefix("place:"))
 		return
@@ -479,6 +498,12 @@ func _on_edit_action(action: String) -> void:
 	_update_status()
 
 
+func _on_prompt_submitted(prompt: String) -> void:
+	if not selected_id.is_empty():
+		scene_sync.request_agent(prompt, [selected_id])
+	_update_status()
+
+
 func _start_place(asset_key: String) -> void:
 	if scene_editor.asset_info(asset_key).is_empty():
 		return
@@ -507,11 +532,10 @@ func _begin_move() -> void:
 func _build_ghost(asset_key: String) -> void:
 	for child in placement_preview.get_children():
 		child.free()
-	var packed := load(str(scene_editor.asset_info(asset_key)["path"])) as PackedScene
-	if packed == null:
+	var visual := scene_editor.instantiate_asset(asset_key)
+	if visual == null:
 		push_error("Could not load placement preview for " + asset_key)
 		return
-	var visual := packed.instantiate()
 	placement_preview.add_child(visual)
 	for mesh_node in visual.find_children("*", "MeshInstance3D", true, false):
 		var mesh := mesh_node as MeshInstance3D
@@ -686,7 +710,12 @@ func _update_xr_panel_ray() -> void:
 		return
 	var ray := _edit_ray()
 	var ray_end := Vector3.ZERO
-	if edit_panel.is_open:
+	if prompt_panel.is_open:
+		if prompt_panel.update_hover(ray["origin"], ray["direction"]):
+			ray_end = prompt_panel.hover_point
+		else:
+			ray_end = ray["origin"] + ray["direction"] * 3.0
+	elif edit_panel.is_open:
 		if edit_panel.update_hover(ray["origin"], ray["direction"]):
 			ray_end = edit_panel.hover_point
 		else:
