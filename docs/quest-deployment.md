@@ -28,7 +28,7 @@ The first command should list the Quest as `device`. Launch **Worldsmith** from 
 
    For later APK builds, omit `--install-android-build-template`.
 
-5. Launch **Worldsmith** from **Library → Unknown Sources**. If a local `client/assets/local/preview.json` is active when you export, the APK opens that GLB (for example, `merchant.glb`); otherwise it opens the sample hall. Aim at the floor with the right controller and teleport by releasing the trigger. Press X to enable left-thumbstick walking, then try entrances and stairs.
+5. Launch **Worldsmith** from **Library → Unknown Sources**. If a local `client/assets/local/preview.json` is active when you export, the APK opens that GLB (for example, `merchant.glb`); otherwise it opens the sample hall. The left thumbstick walks in the direction of your gaze immediately; X toggles walking. Aim at the floor with the right controller and teleport by releasing the trigger, then try entrances and stairs.
 
 If the headset opens a flat window or OpenXR initialization fails, check that the export preset uses **Gradle Build** and **OpenXR**. `unzip -Z -1 build/worldsmith.apk | grep libopenxr_loader.so` should find the loader. Godot's [Android XR deployment instructions](https://docs.godotengine.org/en/4.6/tutorials/xr/deploying_to_android.html) describe optional vendor plugin setup when device-specific support is needed.
 

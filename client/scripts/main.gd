@@ -20,7 +20,7 @@ const DEADZONE := 0.18
 @onready var xr_status: Label3D = $Player/XROrigin/XRCamera/XRStatus
 
 var xr_active := false
-var smooth_locomotion := false
+var smooth_locomotion := true
 var aiming := false
 var teleport_point := Vector3.ZERO
 var mouse_yaw := 0.0
@@ -240,6 +240,8 @@ func _process_movement(delta: float) -> void:
 	var input_vector := Vector2.ZERO
 	if xr_active and smooth_locomotion:
 		input_vector = left_controller.get_vector2("primary")
+		# OpenXR thumbstick Y is positive forward; Godot's camera looks down -Z.
+		input_vector.y = -input_vector.y
 	elif not xr_active:
 		input_vector = Vector2(
 			float(Input.is_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_A)),
@@ -336,7 +338,7 @@ func _destination_is_clear(origin: Vector3) -> bool:
 
 func _update_status() -> void:
 	if xr_active:
-		xr_status.text = "WORLDsmith | Right trigger: teleport | X: smooth %s" % ("ON" if smooth_locomotion else "OFF")
+		xr_status.text = "WORLDsmith | Left stick: walk %s | X: toggle | Right trigger: teleport" % ("ON" if smooth_locomotion else "OFF")
 	else:
 		var title := preview_name if not preview_name.is_empty() else "M1 VIEWER"
 		status.text = "WORLDSMITH  •  %s\nWASD move  •  Arrows look  •  Shift faster  •  Mouse look  •  Right mouse teleport  •  Esc unlock mouse" % title
