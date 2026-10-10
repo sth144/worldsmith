@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 import shutil
 import tempfile
@@ -21,10 +22,44 @@ COLORS = {
     "white": [1, 1, 1, 1], "black": [0.025, 0.025, 0.025, 1],
 }
 
+PLACEABLE = {"chair": "Chair", "table": "Table", "planter": "Planter", "lantern": "Lantern",
+             "hill": "Hill", "tree": "Tree"}
+
+
+def placement(asset_key: str, position: list[float], name: str | None = None,
+              scale: list[float] | None = None) -> dict:
+    return {"type": "add_object", "object": {
+        "id": str(uuid4()), "name": name or PLACEABLE[asset_key], "asset": f"assets/{asset_key}.glb",
+        "parent_id": None, "position": position, "rotation": [0, 0, 0, 1],
+        "scale": scale or [1, 1, 1], "visible": True, "locked": False, "metadata": {},
+    }}
+
+
+def deterministic_view_plan(prompt: str, target: list[float]) -> list[dict] | None:
+    words = prompt.lower()
+    if re.search(r"\bhill\b", words) and re.search(r"\btree\b", words):
+        return [placement("hill", target), placement("tree", [target[0], target[1] + 1.12, target[2]])]
+    if not re.search(r"\b(add|put|place|plant|create)\b", words):
+        return None
+    for key in PLACEABLE:
+        if re.search(r"\b" + key + r"s?\b", words):
+            return [placement(key, target)]
+    return None
+
 
 def _operation_schema(properties: dict) -> dict:
     return {"type": "object", "additionalProperties": False,
             "properties": properties, "required": list(properties)}
+
+
+VIEW_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["placements"],
+    "properties": {"placements": {"type": "array", "items": _operation_schema({
+        "asset_key": {"type": "string", "enum": list(PLACEABLE)}, "name": {"type": "string"},
+        "position": {"type": "array", "items": {"type": "number"}},
+        "scale": {"type": "array", "items": {"type": "number"}},
+    })}},
+}
 
 
 _string = {"type": "string"}
@@ -94,8 +129,6 @@ def deterministic_plan(prompt: str, selected: list[dict]) -> list[dict] | None:
 
 
 async def codex_plan(prompt: str, selected: list[dict], scene: dict) -> list[dict]:
-    if shutil.which("codex") is None:
-        raise HTTPException(503, "Codex CLI is unavailable; try a direct scale, color, visibility, or duplicate request")
     guidance = (
         "You are a scene operation planner. Return JSON with only an operations array. "
         "Allowed types: set_transform (object_id plus all position/rotation/scale arrays), "
@@ -109,10 +142,44 @@ async def codex_plan(prompt: str, selected: list[dict], scene: dict) -> list[dic
         "If the request cannot be expressed with these operations, return an empty array.\n"
         + json.dumps({"request": prompt, "selected": selected, "scene": scene}, separators=(",", ":"))
     )
+    result = await _codex_json(guidance, SCHEMA)
+    if "operations" not in result:
+        raise HTTPException(502, "Codex returned invalid operations")
+    return result["operations"]
+
+
+async def codex_view_plan(prompt: str, view: dict, scene: dict) -> list[dict]:
+    guidance = (
+        "Plan placements in a 3D scene. Return JSON with only a placements array. "
+        "Use only the catalog asset keys. Coordinates are meters and Y up. "
+        "The target is where the user is looking on the floor. Place requested objects near it; "
+        "put a tree on a hill at hill center plus 1.12 meters Y. "
+        "Do not alter existing objects or the base environment. If available assets cannot "
+        "express the request, return an empty array. Use scale [1,1,1] by default. "
+        "Never write files or execute code.\n" + json.dumps({
+            "request": prompt, "view": view, "catalog": PLACEABLE,
+            "nearby_objects": [obj for obj in scene["objects"] if math.dist(
+                obj["position"], view["target_position"]) < 10],
+        }, separators=(",", ":"))
+    )
+    result = await _codex_json(guidance, VIEW_SCHEMA)
+    proposals = result.get("placements")
+    if not isinstance(proposals, list):
+        raise HTTPException(502, "Codex returned invalid placements")
+    try:
+        return [placement(item["asset_key"], item["position"], item["name"], item["scale"])
+                for item in proposals]
+    except (KeyError, TypeError) as exc:
+        raise HTTPException(502, "Codex returned invalid placements") from exc
+
+
+async def _codex_json(guidance: str, schema: dict) -> dict:
+    if shutil.which("codex") is None:
+        raise HTTPException(503, "Codex CLI is unavailable; try a direct placement or selected-object request")
     with tempfile.TemporaryDirectory(prefix="worldsmith-agent-") as directory:
         root = Path(directory)
         schema_path, answer_path = root / "schema.json", root / "answer.json"
-        schema_path.write_text(json.dumps(SCHEMA))
+        schema_path.write_text(json.dumps(schema))
         process = await asyncio.create_subprocess_exec(
             "codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--output-schema", str(schema_path),
             "--output-last-message", str(answer_path), "-", cwd=root,
@@ -128,18 +195,35 @@ async def codex_plan(prompt: str, selected: list[dict], scene: dict) -> list[dic
         if process.returncode != 0 or not answer_path.is_file():
             raise HTTPException(502, "Codex could not plan this edit: " + stderr.decode(errors="replace")[-300:])
         try:
-            return json.loads(answer_path.read_text())["operations"]
-        except (ValueError, KeyError, TypeError) as exc:
+            result = json.loads(answer_path.read_text())
+            if not isinstance(result, dict):
+                raise TypeError("Expected a JSON object")
+            return result
+        except (ValueError, TypeError) as exc:
             raise HTTPException(502, "Codex returned invalid operations") from exc
 
 
-def validate_proposal(operations: list[dict], scene: dict, selected_ids: list[str], assets: set[str]) -> None:
+def validate_proposal(operations: list[dict], scene: dict, selected_ids: list[str], assets: set[str],
+                      target: list[float] | None = None) -> None:
     if not isinstance(operations, list) or not 1 <= len(operations) <= 16:
         raise HTTPException(422, "AI request produced no supported edit")
     editable = set(selected_ids)
     working = {obj["id"]: obj.copy() for obj in scene["objects"]}
     try:
         for operation in operations:
+            if isinstance(operation, dict) and operation.get("type") == "add_object" and target is not None:
+                obj = operation.get("object", {})
+                if not isinstance(obj, dict):
+                    raise SceneError("Placement object is invalid")
+                if obj.get("asset") not in {f"assets/{key}.glb" for key in PLACEABLE}:
+                    raise SceneError("Agent may place catalog assets only")
+                position = obj.get("position")
+                if (not isinstance(position, list) or len(position) != 3 or
+                    math.dist(position, target) > 5):
+                    raise SceneError("Placement must be within five meters of the viewed point")
+                apply_operation(working, operation, assets)
+                editable.add(obj["id"])
+                continue
             if not isinstance(operation, dict) or operation.get("type") not in {
                 "set_transform", "set_visibility", "set_material", "duplicate_object", "delete_object"
             } or operation.get("object_id") not in editable:

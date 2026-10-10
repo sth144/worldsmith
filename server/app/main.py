@@ -12,12 +12,13 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .assets import asset_path, glb_material_names, list_assets
-from .agent import codex_plan, deterministic_plan, validate_proposal
+from .agent import codex_plan, codex_view_plan, deterministic_plan, deterministic_view_plan, validate_proposal
 from .export import export_scene, source_manifest
 from .geometry import create_proposal, interpret_geometry, read_job, run_geometry
 from .history import write_json
 from .history import history_status
 from .storage import SceneStore
+from .scene import SceneError, vector
 from .websocket import Connections
 
 REPO = Path(__file__).resolve().parents[2]
@@ -39,14 +40,35 @@ class RevisionRequest(BaseModel):
 class AgentRequest(BaseModel):
     expected_revision: int = Field(ge=0)
     prompt: str = Field(min_length=3, max_length=1000)
-    selected_object_ids: list[str] = Field(min_length=1, max_length=16)
+    selected_object_ids: list[str] = Field(default_factory=list, max_length=16)
+    view: dict[str, Any] | None = None
+
+
+def validate_view(view: dict[str, Any] | None) -> dict:
+    if not isinstance(view, dict):
+        raise HTTPException(422, "Look at a floor point to place objects")
+    try:
+        camera = vector(view.get("camera_position"), 3)
+        target = vector(view.get("target_position"), 3)
+        direction = vector(view.get("camera_direction"), 3)
+        if sum(item * item for item in direction) < 0.9 or sum(item * item for item in direction) > 1.1:
+            raise SceneError("View direction must be normalized")
+        if sum((a - b) ** 2 for a, b in zip(camera, target)) > 30 ** 2:
+            raise SceneError("Viewed point is too far away")
+        offset = [a - b for a, b in zip(target, camera)]
+        distance = sum(item * item for item in offset) ** 0.5
+        if distance < 0.1 or sum(a * b for a, b in zip(offset, direction)) < distance * 0.9:
+            raise SceneError("Viewed point must be in front of the camera")
+    except SceneError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"camera_position": camera, "camera_direction": direction, "target_position": target}
 
 
 def create_app(data_dir: Path | None = None) -> FastAPI:
     root = data_dir or Path(os.environ.get("WORLDSMITH_DATA_DIR", REPO / "data")) / "projects"
     store = SceneStore(root, REPO / "projects" / "demo")
     connections = Connections()
-    app = FastAPI(title="Worldsmith Scene Server", version="0.6.1")
+    app = FastAPI(title="Worldsmith Scene Server", version="0.7.0")
     app.state.store = store
 
     @app.get("/api/scenes/{scene_id}")
@@ -73,22 +95,28 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             object_id not in by_id for object_id in body.selected_object_ids
         ):
             raise HTTPException(422, "Select existing objects")
+        view = validate_view(body.view) if not body.selected_object_ids else None
         selected = []
         for object_id in body.selected_object_ids:
             obj = by_id[object_id].copy()
             obj["available_materials"] = sorted(glb_material_names(store.project(scene_id) / obj["asset"]))
             selected.append(obj)
-        operations = deterministic_plan(body.prompt, selected)
+        operations = (deterministic_view_plan(body.prompt, view["target_position"]) if view is not None
+                      else deterministic_plan(body.prompt, selected))
         if operations is None:
-            geometry_spec = interpret_geometry(body.prompt)
-            if geometry_spec is not None:
-                if len(selected) != 1:
-                    raise HTTPException(422, "Select one object for a geometry edit")
-                job = create_proposal(store.project(scene_id), scene, selected[0]["id"], body.prompt, geometry_spec)
-                return {"status": "approval_required", "job": job}
-            operations = await codex_plan(body.prompt, selected, scene)
+            if view is not None:
+                operations = await codex_view_plan(body.prompt, view, scene)
+            else:
+                geometry_spec = interpret_geometry(body.prompt)
+                if geometry_spec is not None:
+                    if len(selected) != 1:
+                        raise HTTPException(422, "Select one object for a geometry edit")
+                    job = create_proposal(store.project(scene_id), scene, selected[0]["id"], body.prompt, geometry_spec)
+                    return {"status": "approval_required", "job": job}
+                operations = await codex_plan(body.prompt, selected, scene)
         assets = {item["path"] for item in list_assets(store.project(scene_id))}
-        validate_proposal(operations, scene, body.selected_object_ids, assets)
+        validate_proposal(operations, scene, body.selected_object_ids, assets,
+                          view["target_position"] if view is not None else None)
         result = store.apply(scene_id, body.expected_revision, operations)
         await connections.broadcast(scene_id, {"type": "delta", **result})
         return {"operations": operations, **result}

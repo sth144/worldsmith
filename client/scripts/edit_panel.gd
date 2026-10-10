@@ -9,6 +9,7 @@ const ASSET_ROWS := [
 	{"action": "place:planter", "label": "Planter"},
 	{"action": "place:lantern", "label": "Lantern"},
 	{"action": "ask_ai", "label": "Ask AI…"},
+	{"action": "ask_ai_here", "label": "Ask AI here…"},
 	{"action": "approve_geometry", "label": "Approve mesh edit"},
 ]
 const EDIT_ROWS := [

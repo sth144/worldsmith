@@ -47,6 +47,8 @@ Select a placed object and open the inventory. **Ask AI…** opens a text field 
 
 Color requests can name an imported material. For the sample chair, “turn the upholstery red” changes only the `Sea green fabric` material and restores the wood if a previous whole-object tint was applied. Other named-part requests use the selected asset's material names; the server rejects names the GLB does not contain. Scene export preserves these targeted colors.
 
+You can also place objects by describing a point in view. Look down at a floor spot, open the inventory, and choose **Ask AI here…**. Try “Put a hill over here with a tree on it.” The client captures the floor point when the inventory opens; the server places a walkable hill and a tree together as one saved, undoable edit. Simple “put a tree/chair/table/planter/lantern/hill here” requests also work locally. Other arrangements go through Codex, which can choose from those six existing assets and place them within five meters of the viewed point. If no floor point is under your gaze, close the inventory, look down, and reopen it. **Ask AI…** continues to edit a selected object; with no selection it also uses the viewed point. The view prompt cannot yet remodel an arbitrary part of the imported merchant GLB. For that, the base environment needs individually addressable meshes or a terrain editing workflow.
+
 “Round the corners,” “make this taller,” and “cut a doorway/opening” create **geometry proposals** for one selected placed object. The scene stays unchanged until you choose **Approve mesh edit** in the inventory. The server runs a fixed Blender script against a copy of that object's GLB, keeps the original asset, registers a versioned GLB, and replaces the scene reference. Undo restores the old asset. The client downloads new versions at runtime. This initial geometry worker uses fixed operations and does not execute arbitrary agent-written Python; geometry work is limited to the selected asset, and openings are centered automatically. Base-environment meshes are not individually selectable yet. The server and Blender run on the local computer; the Quest only receives resulting assets and scene deltas.
 
 The server registers the sample hall as its default base environment. To export your current local merchant preview instead, register its GLB and instance sidecars from the repo root:
@@ -81,8 +83,11 @@ The launcher uses an existing Godot executable when available. On macOS, if none
 ./scripts/godot.sh --headless --xr-mode off --path client --quit-after 2
 ./scripts/godot.sh --headless --xr-mode off --path client --script res://tests/smoke.gd -- --no-preview --offline
 ./scripts/godot.sh --headless --xr-mode off --path client --script res://tests/editing.gd -- --no-preview --offline
+./scripts/godot.sh --headless --xr-mode off --path client --script res://tests/view_placement.gd -- --no-preview --offline
 uv run --project server pytest -q server/tests
 ```
+
+The client/server view-prompt integration check is `client/tests/view_flow.gd`; run it against a fresh demo scene on a test server using `--server-url`.
 
 ## Preview a Blender scene
 

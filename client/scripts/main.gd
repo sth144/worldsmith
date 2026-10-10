@@ -42,6 +42,9 @@ var grip_was_pressed := false
 var trigger_was_pressed := false
 var selection_outline: MeshInstance3D
 var xr_pointer: MeshInstance3D
+var prompt_view: Dictionary = {}
+var inventory_view: Dictionary = {}
+var prompt_for_view := false
 
 
 func _ready() -> void:
@@ -446,6 +449,8 @@ func _toggle_inventory() -> void:
 
 
 func _set_inventory(value: bool) -> void:
+	if value:
+		inventory_view = _view_context()
 	if value and _is_editing():
 		_cancel_edit()
 	aiming = false
@@ -459,11 +464,11 @@ func _on_edit_action(action: String) -> void:
 		scene_sync.approve_geometry()
 		_set_inventory(false)
 		return
-	if action == "ask_ai":
-		if selected_id.is_empty():
-			return
+	if action == "ask_ai" or action == "ask_ai_here":
+		prompt_for_view = action == "ask_ai_here" or selected_id.is_empty()
+		prompt_view = inventory_view if prompt_for_view else {}
 		_set_inventory(false)
-		prompt_panel.open(xr_active, xr_camera if xr_active else desktop_camera)
+		prompt_panel.open(xr_active, xr_camera if xr_active else desktop_camera, prompt_for_view)
 		return
 	if action.begins_with("place:"):
 		_start_place(action.trim_prefix("place:"))
@@ -499,9 +504,28 @@ func _on_edit_action(action: String) -> void:
 
 
 func _on_prompt_submitted(prompt: String) -> void:
-	if not selected_id.is_empty():
+	if prompt_for_view and not prompt_view.is_empty():
+		scene_sync.request_agent(prompt, [], prompt_view)
+	elif not prompt_for_view and not selected_id.is_empty():
 		scene_sync.request_agent(prompt, [selected_id])
+	else:
+		scene_sync.last_error = "Look down at a floor point, then open Ask AI"
+		scene_sync.status_changed.emit()
 	_update_status()
+
+
+func _view_context() -> Dictionary:
+	var camera: Camera3D = xr_camera if xr_active else desktop_camera
+	var origin := camera.global_position
+	var direction := -camera.global_basis.z.normalized()
+	var query := PhysicsRayQueryParameters3D.create(origin, origin + direction * 30.0, 1)
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return {}
+	var point: Vector3 = hit["position"]
+	return {"camera_position": [origin.x, origin.y, origin.z],
+		"camera_direction": [direction.x, direction.y, direction.z],
+		"target_position": [point.x, point.y, point.z]}
 
 
 func _start_place(asset_key: String) -> void:

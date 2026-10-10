@@ -11,6 +11,8 @@ const CATALOG := {
 	"table": {"label": "Table", "path": "res://assets/inventory/table.glb", "size": Vector3(1.28, 0.78, 0.78)},
 	"planter": {"label": "Planter", "path": "res://assets/inventory/planter.glb", "size": Vector3(0.54, 1.1, 0.54)},
 	"lantern": {"label": "Lantern", "path": "res://assets/inventory/lantern.glb", "size": Vector3(0.4, 0.7, 0.4)},
+	"hill": {"label": "Hill", "path": "res://assets/inventory/hill.glb", "size": Vector3(4.7, 1.12, 4.7)},
+	"tree": {"label": "Tree", "path": "res://assets/inventory/tree.glb", "size": Vector3(2.2, 3.25, 2.2)},
 }
 
 var objects: Dictionary = {}
@@ -309,6 +311,22 @@ func _apply_state(object_id: String, state: Dictionary) -> void:
 	collision.shape = shape
 	collision.position.y = size.y * 0.5
 	body.add_child(collision)
+	if str(state["asset"]).begins_with("hill"):
+		# A separate mesh collider makes the new mound walkable while keeping
+		# the broad selection box on the object-selection layer.
+		var terrain := StaticBody3D.new()
+		terrain.name = "WalkableHill"
+		terrain.collision_layer = 1
+		terrain.collision_mask = 0
+		body.add_child(terrain)
+		for mesh_node in visual.find_children("*", "MeshInstance3D", true, false):
+			var mesh := mesh_node as MeshInstance3D
+			if mesh.mesh == null:
+				continue
+			var terrain_shape := CollisionShape3D.new()
+			terrain_shape.shape = mesh.mesh.create_trimesh_shape()
+			terrain_shape.transform = terrain.global_transform.affine_inverse() * mesh.global_transform
+			terrain.add_child(terrain_shape)
 	objects[object_id] = body
 
 

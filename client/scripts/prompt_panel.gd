@@ -16,6 +16,8 @@ var prompt_label: Label3D
 var key_labels: Dictionary = {}
 var desktop_panel: PanelContainer
 var desktop_input: LineEdit
+var desktop_title: Label
+var xr_title: Label3D
 
 
 func _ready() -> void:
@@ -23,9 +25,12 @@ func _ready() -> void:
 	_build_xr()
 
 
-func open(xr: bool, camera: Camera3D) -> void:
+func open(xr: bool, camera: Camera3D, view_mode: bool = false) -> void:
 	is_open = true
 	xr_active = xr
+	desktop_title.text = "Ask AI about the viewed point" if view_mode else "Ask AI to edit the selected object"
+	xr_title.text = "ASK AI  /  VIEWED POINT" if view_mode else "ASK AI  /  SELECTED OBJECT"
+	desktop_input.placeholder_text = "Put a hill here with a tree on it" if view_mode else "Make this chair twice as wide"
 	text_value = ""
 	_update_text()
 	desktop_panel.visible = not xr
@@ -130,9 +135,8 @@ func _build_desktop() -> void:
 	layer.add_child(desktop_panel)
 	var rows := VBoxContainer.new()
 	desktop_panel.add_child(rows)
-	var title := Label.new()
-	title.text = "Ask AI to edit the selected object"
-	rows.add_child(title)
+	desktop_title = Label.new()
+	rows.add_child(desktop_title)
 	desktop_input = LineEdit.new()
 	desktop_input.placeholder_text = "Make this chair twice as wide"
 	desktop_input.text_submitted.connect(_submit)
@@ -157,7 +161,7 @@ func _build_xr() -> void:
 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	background.material_override = material
 	xr_panel.add_child(background)
-	_add_label("ASK AI  /  SELECTED OBJECT", Vector3(-0.62, 0.45, 0.018), 27)
+	xr_title = _add_label("ASK AI  /  SELECTED OBJECT", Vector3(-0.62, 0.45, 0.018), 27)
 	prompt_label = _add_label("Request: ", Vector3(-0.62, 0.30, 0.018), 21)
 	for row_index in range(KEY_ROWS.size()):
 		var letters: String = KEY_ROWS[row_index]

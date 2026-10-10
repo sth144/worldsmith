@@ -28,6 +28,12 @@ class SceneStore:
         self.root.mkdir(parents=True, exist_ok=True)
         if not (self.root / "demo" / "scene.json").exists():
             shutil.copytree(self.seed, self.root / "demo", dirs_exist_ok=True)
+        # Existing local projects receive new catalog props without replacing user assets.
+        for asset in (self.seed / "assets").glob("*.glb"):
+            destination = self.root / "demo" / "assets" / asset.name
+            if not destination.exists():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(asset, destination)
         self._ensure_environment(self.root / "demo")
 
     @staticmethod

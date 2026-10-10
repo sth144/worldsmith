@@ -207,7 +207,7 @@ func _rebuild_local() -> void:
 
 
 func _download_asset(asset_key: String) -> void:
-	if downloading.has(asset_key) or not asset_key.begins_with("chair-v-") and not asset_key.begins_with("table-v-") and not asset_key.begins_with("planter-v-") and not asset_key.begins_with("lantern-v-"):
+	if downloading.has(asset_key) or not asset_key.begins_with("chair-v-") and not asset_key.begins_with("table-v-") and not asset_key.begins_with("planter-v-") and not asset_key.begins_with("lantern-v-") and not asset_key.begins_with("hill-v-") and not asset_key.begins_with("tree-v-"):
 		return
 	var cached := "user://assets/" + asset_key + ".glb"
 	if FileAccess.file_exists(cached):
@@ -289,13 +289,15 @@ func status_text() -> String:
 	return "Offline — %d edit(s) queued" % pending.size()
 
 
-func request_agent(prompt: String, selected_ids: Array[String]) -> void:
+func request_agent(prompt: String, selected_ids: Array[String], view: Dictionary = {}) -> void:
 	if disabled or not online or agent_busy or not pending.is_empty():
 		last_error = "Connect and save edits before asking AI"
 		status_changed.emit()
 		return
 	var endpoint := server_url.replace("ws://", "http://").replace("wss://", "https://")
 	var payload := {"expected_revision": revision, "prompt": prompt, "selected_object_ids": selected_ids}
+	if not view.is_empty():
+		payload["view"] = view
 	var error := agent_request.request(endpoint + "/api/scenes/" + scene_id + "/agent", ["Content-Type: application/json"], HTTPClient.METHOD_POST, JSON.stringify(payload))
 	if error != OK:
 		last_error = "Could not send AI request"

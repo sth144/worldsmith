@@ -4,6 +4,8 @@
 
 ### Added
 
+- View-based AI placement without selecting a prop: a floor gaze point, validated catalog placement proposals, reusable hill and tree GLBs, walkable hill collision, and one-step undo for a hill/tree arrangement.
+
 - Milestone 4 selected-object natural-language prompt on desktop and in VR, deterministic direct requests, and read-only Codex CLI planning with server-side proposal validation.
 - Milestone 5 explicit geometry approval, fixed Blender bevel/stretch/opening operations, versioned GLB assets, runtime downloads, and persistent undo for asset replacement.
 - Milestone 6 registered base-environment assets, source manifest, Blender-composed portable GLB export, and Geometry Nodes preview instance inclusion.
