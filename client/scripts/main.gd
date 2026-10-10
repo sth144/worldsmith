@@ -92,7 +92,7 @@ func _load_preview_from_args() -> void:
 		if glb_path.get_file() == "merchant.glb" and (node_name.begins_with("gate doors") or node_name.begins_with("gate ironwork") or node_name.begins_with("gate straps")):
 			mesh_instance.visible = false
 			continue
-		var walkable := _name_has_any(node_name, ["grid", "paving", "floor", "road", "deck", "stoop"])
+		var walkable := _name_has_any(node_name, ["grid", "paving", "floor", "road", "deck", "stoop", "stair"])
 		var solid := walkable or _name_has_any(node_name, ["wall", "column", "pillar"])
 		if not solid:
 			continue
@@ -279,15 +279,19 @@ func _try_step_up(before: Vector3, direction: Vector3, travel: float) -> void:
 	var rise: float = hit.position.y - before.y
 	if rise < 0.08 or rise > MAX_STEP_HEIGHT:
 		return
-	# Door stoops can have a raised lip above their walkable center.
-	var raised_origin := before + Vector3.UP * (MAX_STEP_HEIGHT + 0.02)
 	var horizontal := direction * probe_distance
-	if not _destination_is_clear(raised_origin + horizontal):
+	# The capsule may overlap the next tread even when the probed tread is clear.
+	# Try the smallest lift first, then rise only as far as needed to pass it.
+	for attempt in range(9):
+		var lift := minf(rise + 0.05 + attempt * 0.1, MAX_STEP_HEIGHT + 0.02)
+		var raised_origin := before + Vector3.UP * lift
+		if not _destination_is_clear(raised_origin + horizontal):
+			continue
+		if player.test_move(Transform3D(player.global_basis, raised_origin), horizontal):
+			continue
+		player.global_position = raised_origin + horizontal
+		player.velocity.y = 0.0
 		return
-	if player.test_move(Transform3D(player.global_basis, raised_origin), horizontal):
-		return
-	player.global_position = raised_origin + horizontal
-	player.velocity.y = 0.0
 
 
 func _update_teleport_target() -> void:

@@ -37,5 +37,17 @@ func _check() -> void:
 	forward.pressed = false
 	Input.parse_input_event(forward)
 	assert(player.global_position.z > 0.0 and player.global_position.y > 24.0, "Could not walk through the front door")
+	player.global_position = Vector3(14.9, 24.2, -0.5)
+	player.velocity = Vector3.ZERO
+	await physics_frame
+	var climb := InputEventKey.new()
+	climb.keycode = KEY_D
+	climb.pressed = true
+	Input.parse_input_event(climb)
+	for frame in range(75):
+		await physics_frame
+	climb.pressed = false
+	Input.parse_input_event(climb)
+	assert(player.global_position.x > 19.4 and player.global_position.y > 28.1, "Could not climb the north staircase to its landing")
 	print("Preview smoke: %d meshes, %d grass instances, baked terrain, collision OK" % [meshes.size(), grass.multimesh.instance_count])
 	quit()

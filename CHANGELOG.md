@@ -16,3 +16,4 @@
 - Desktop Shift sprinting; walkable merchant entrances with step-up handling and an open gate in the preview.
 - Desktop arrow-key view control alongside WASD movement and mouse look.
 - Contact shading and fill lights that separate flat architectural surfaces in the merchant preview.
+- Walkable preview stair collision and step-up movement through the merchant's straight staircases to the upper floor.
