@@ -20,6 +20,8 @@ COLORS = {
     "blue": [0.08, 0.22, 0.9, 1], "yellow": [0.95, 0.78, 0.06, 1],
     "white": [1, 1, 1, 1], "black": [0.025, 0.025, 0.025, 1],
 }
+
+
 def _operation_schema(properties: dict) -> dict:
     return {"type": "object", "additionalProperties": False,
             "properties": properties, "required": list(properties)}
@@ -35,7 +37,8 @@ SCHEMA = {
         _operation_schema({"type": {"type": "string", "enum": ["set_visibility"]},
                            "object_id": _string, "visible": {"type": "boolean"}}),
         _operation_schema({"type": {"type": "string", "enum": ["set_material"]},
-                           "object_id": _string, "color": _numbers}),
+                           "object_id": _string, "color": _numbers,
+                           "material_name": {"type": ["string", "null"]}}),
         _operation_schema({"type": {"type": "string", "enum": ["duplicate_object"]},
                            "object_id": _string, "new_id": _string}),
         _operation_schema({"type": {"type": "string", "enum": ["delete_object"]},
@@ -54,8 +57,19 @@ def deterministic_plan(prompt: str, selected: list[dict]) -> list[dict] | None:
     if "hide" in words or "show" in words:
         return [{"type": "set_visibility", "object_id": obj["id"], "visible": "show" in words} for obj in selected]
     for name, color in COLORS.items():
-        if name in words and any(verb in words for verb in ("color", "colour", "make", "paint")):
-            return [{"type": "set_material", "object_id": obj["id"], "color": color} for obj in selected]
+        if re.search(r"\b" + name + r"\b", words) and any(verb in words for verb in ("color", "colour", "make", "paint", "turn", "change")):
+            operations = []
+            targeted = any(part in words for part in ("upholstery", "fabric", "cushion"))
+            for obj in selected:
+                operation = {"type": "set_material", "object_id": obj["id"], "color": color}
+                if targeted:
+                    material = next((material for material in obj.get("available_materials", [])
+                                     if any(part in material.lower() for part in ("fabric", "upholstery", "cushion"))), None)
+                    if material is None:
+                        return None
+                    operation["material_name"] = material
+                operations.append(operation)
+            return operations
     factor = None
     if "twice" in words or "double" in words:
         factor = 2.0
@@ -85,10 +99,12 @@ async def codex_plan(prompt: str, selected: list[dict], scene: dict) -> list[dic
     guidance = (
         "You are a scene operation planner. Return JSON with only an operations array. "
         "Allowed types: set_transform (object_id plus all position/rotation/scale arrays), "
-        "set_visibility (object_id, visible), set_material (object_id, color RGBA 0..1), "
+        "set_visibility (object_id, visible), set_material (object_id, color RGBA 0..1, "
+        "material_name exact asset material name or null for the whole object), "
         "duplicate_object (object_id, new_id UUID), delete_object (object_id). "
         "Use selected object IDs, or IDs created by preceding duplicate_object operations. "
-        "Preserve existing values when changing one axis. "
+        "Preserve existing values when changing one axis. When the request names upholstery, "
+        "fabric, or another part, choose the exact matching available_materials name. "
         "Coordinates are meters, Y up. Never write files or execute code. "
         "If the request cannot be expressed with these operations, return an empty array.\n"
         + json.dumps({"request": prompt, "selected": selected, "scene": scene}, separators=(",", ":"))

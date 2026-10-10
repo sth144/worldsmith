@@ -111,7 +111,7 @@ class SceneDocument(BaseModel):
         return self
 
 
-def apply_operation(objects: dict[str, dict], operation: dict, assets: set[str]) -> set[str]:
+def apply_operation(objects: dict[str, dict], operation: dict, assets: set[str], material_names: dict[str, set[str]] | None = None) -> set[str]:
     """Mutate a working copy and return changed IDs. Caller commits only after all validate."""
     if not isinstance(operation, dict):
         raise SceneError("Operation must be an object")
@@ -121,7 +121,7 @@ def apply_operation(objects: dict[str, dict], operation: dict, assets: set[str])
         "delete_object": {"type", "object_id"},
         "set_transform": {"type", "object_id", "position", "rotation", "scale"},
         "set_visibility": {"type", "object_id", "visible"},
-        "set_material": {"type", "object_id", "color"},
+        "set_material": {"type", "object_id", "color", "material_name"},
         "replace_asset": {"type", "object_id", "asset"},
         "duplicate_object": {"type", "object_id", "new_id"},
     }
@@ -179,7 +179,21 @@ def apply_operation(objects: dict[str, dict], operation: dict, assets: set[str])
         color = vector(operation.get("color"), 4)
         if any(component < 0 or component > 1 for component in color):
             raise SceneError("Material color must be within 0–1")
-        current["metadata"]["material_color"] = color
+        material_name = operation.get("material_name")
+        if material_name is None:
+            current["metadata"]["material_color"] = color
+            current["metadata"].pop("material_overrides", None)
+        else:
+            if not isinstance(material_name, str) or not 1 <= len(material_name) <= 128:
+                raise SceneError("material_name must be a nonempty name")
+            if material_names is not None and material_name not in material_names.get(current["asset"], set()):
+                raise SceneError("Asset has no material named " + material_name)
+            # A targeted repaint supersedes a previous whole-object tint.
+            current["metadata"].pop("material_color", None)
+            overrides = current["metadata"].setdefault("material_overrides", {})
+            if not isinstance(overrides, dict):
+                raise SceneError("Invalid material_overrides metadata")
+            overrides[material_name] = color
     elif kind == "replace_asset":
         asset = operation.get("asset")
         if asset not in assets:

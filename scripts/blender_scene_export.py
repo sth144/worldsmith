@@ -1,6 +1,7 @@
 """Blender child process: compose server assets in a clean scene and export GLB."""
 
 import json
+import re
 import struct
 import sys
 from pathlib import Path
@@ -35,7 +36,7 @@ def world_matrix(item):
     return matrix
 
 
-def import_asset(relative, transform=None, color=None):
+def import_asset(relative, transform=None, metadata=None):
     before = set(bpy.data.objects)
     bpy.ops.import_scene.gltf(filepath=str(project / relative))
     imported = set(bpy.data.objects) - before
@@ -44,12 +45,20 @@ def import_asset(relative, transform=None, color=None):
         for obj in imported:
             if obj.parent not in imported:
                 obj.matrix_world = target @ obj.matrix_world
-    if color is not None:
+    if metadata:
+        global_color = metadata.get("material_color")
+        overrides = metadata.get("material_overrides", {})
+        if not isinstance(overrides, dict):
+            overrides = {}
         for obj in imported:
             if obj.type != "MESH":
                 continue
             for slot in obj.material_slots:
                 if slot.material is None:
+                    continue
+                name = re.sub(r"\.\d{3}$", "", slot.material.name)
+                color = global_color if global_color is not None else overrides.get(slot.material.name, overrides.get(name))
+                if color is None:
                     continue
                 material = slot.material.copy()
                 slot.material = material
@@ -93,7 +102,7 @@ for group_index, group in enumerate(config["environment"].get("instances", [])):
 for item in scene["objects"]:
     if not item["visible"]:
         continue
-    import_asset(item["asset"], world_matrix(item), item["metadata"].get("material_color"))
+    import_asset(item["asset"], world_matrix(item), item["metadata"])
 
 bpy.ops.export_scene.gltf(filepath=config["output"], export_format="GLB", export_apply=True,
                           export_gpu_instances=True)

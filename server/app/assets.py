@@ -40,8 +40,8 @@ def asset_path(project: Path, asset_id: str) -> Path:
     return path
 
 
-def validate_glb(path: Path) -> None:
-    """Check the GLB container and require at least one mesh before registration."""
+def glb_document(path: Path) -> dict:
+    """Read and validate the JSON chunk of a GLB container."""
     size = path.stat().st_size
     with path.open("rb") as source:
         header = source.read(20)
@@ -54,5 +54,15 @@ def validate_glb(path: Path) -> None:
             document = json.loads(source.read(chunk_size))
         except (ValueError, UnicodeDecodeError) as exc:
             raise ValueError("Invalid GLB JSON") from exc
-    if not document.get("meshes"):
+    if not isinstance(document, dict) or not document.get("meshes"):
         raise ValueError("GLB has no meshes")
+    return document
+
+
+def validate_glb(path: Path) -> None:
+    glb_document(path)
+
+
+def glb_material_names(path: Path) -> set[str]:
+    return {item["name"] for item in glb_document(path).get("materials", [])
+            if isinstance(item, dict) and isinstance(item.get("name"), str)}

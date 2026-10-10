@@ -13,7 +13,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from .assets import list_assets, valid_scene_id
+from .assets import glb_material_names, list_assets, valid_scene_id
 from .history import history_status, replay, write_json
 from .scene import SceneDocument, SceneError, apply_operation
 
@@ -109,10 +109,16 @@ class SceneStore:
             assets = {item["path"] for item in list_assets(self.project(scene_id))}
             try:
                 for operation in operations:
-                    apply_operation(objects, operation, assets)
+                    names = None
+                    if isinstance(operation, dict) and operation.get("type") == "set_material" and operation.get("material_name") is not None:
+                        target = objects.get(operation.get("object_id"))
+                        if target is not None:
+                            asset = target["asset"]
+                            names = {asset: glb_material_names(self.project(scene_id) / asset)}
+                    apply_operation(objects, operation, assets, names)
                 candidate = {**scene, "objects": list(objects.values()), "revision": scene["revision"] + 1}
                 candidate = SceneDocument.model_validate(candidate).model_dump()
-            except (SceneError, ValidationError, TypeError) as exc:
+            except (SceneError, ValidationError, TypeError, ValueError) as exc:
                 raise HTTPException(422, str(exc)) from exc
             after = {obj["id"]: obj for obj in candidate["objects"]}
             changed = {object_id for object_id in before.keys() | after.keys() if before.get(object_id) != after.get(object_id)}

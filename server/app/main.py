@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from .assets import asset_path, list_assets
+from .assets import asset_path, glb_material_names, list_assets
 from .agent import codex_plan, deterministic_plan, validate_proposal
 from .export import export_scene, source_manifest
 from .geometry import create_proposal, interpret_geometry, read_job, run_geometry
@@ -46,7 +46,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     root = data_dir or Path(os.environ.get("WORLDSMITH_DATA_DIR", REPO / "data")) / "projects"
     store = SceneStore(root, REPO / "projects" / "demo")
     connections = Connections()
-    app = FastAPI(title="Worldsmith Scene Server", version="0.6.0")
+    app = FastAPI(title="Worldsmith Scene Server", version="0.6.1")
     app.state.store = store
 
     @app.get("/api/scenes/{scene_id}")
@@ -73,7 +73,11 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             object_id not in by_id for object_id in body.selected_object_ids
         ):
             raise HTTPException(422, "Select existing objects")
-        selected = [by_id[object_id] for object_id in body.selected_object_ids]
+        selected = []
+        for object_id in body.selected_object_ids:
+            obj = by_id[object_id].copy()
+            obj["available_materials"] = sorted(glb_material_names(store.project(scene_id) / obj["asset"]))
+            selected.append(obj)
         operations = deterministic_plan(body.prompt, selected)
         if operations is None:
             geometry_spec = interpret_geometry(body.prompt)

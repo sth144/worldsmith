@@ -196,9 +196,26 @@ func _apply_material(body: StaticBody3D, metadata: Dictionary) -> void:
 		material.albedo_color = Color(float(color_values[0]), float(color_values[1]), float(color_values[2]), float(color_values[3]))
 		if material.albedo_color.a < 1.0:
 			material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	var overrides: Variant = metadata.get("material_overrides", {})
+	if not overrides is Dictionary:
+		overrides = {}
 	var visual := body.get_node("Visual")
 	for mesh_node in visual.find_children("*", "MeshInstance3D", true, false):
-		(mesh_node as MeshInstance3D).material_override = material
+		var mesh := mesh_node as MeshInstance3D
+		mesh.material_override = material
+		if mesh.mesh == null:
+			continue
+		for index in range(mesh.mesh.get_surface_count()):
+			var source := mesh.mesh.surface_get_material(index)
+			var name := source.resource_name if source != null else ""
+			if overrides.has(name):
+				var values: Array = overrides[name]
+				if values.size() == 4:
+					var tinted: BaseMaterial3D = source.duplicate() if source is BaseMaterial3D else StandardMaterial3D.new()
+					tinted.albedo_color = Color(float(values[0]), float(values[1]), float(values[2]), float(values[3]))
+					mesh.set_surface_override_material(index, tinted)
+					continue
+			mesh.set_surface_override_material(index, null)
 
 
 func replay_operation(operation: Dictionary) -> void:

@@ -31,6 +31,7 @@
 
 ### Fixed
 
+- Repaint a named upholstery material without recoloring the chair's wood; a targeted repaint also clears a previous whole-object tint and exports with the same appearance.
 - Enable Android ETC2/ASTC texture import so Godot 4.6.3 can export the Quest APK.
 - Use Godot's Gradle Android build so the Quest APK includes the OpenXR loader.
 - Enable left-thumbstick walking by default and map OpenXR's forward axis to Godot's forward direction.
