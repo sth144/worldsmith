@@ -22,5 +22,17 @@ func _check() -> void:
 	assert(grass != null and grass.multimesh.instance_count > 0, "Geometry Nodes grass instances were not loaded")
 	var floor_ray := PhysicsRayQueryParameters3D.create(Vector3(-13, 27, 10), Vector3(-13, 19, 10), 1)
 	assert(not world.get_world_3d().direct_space_state.intersect_ray(floor_ray).is_empty(), "Courtyard has no teleportable collision")
+	var player: CharacterBody3D = world.get_node("Player")
+	player.global_position = Vector3(13.1, 23.4, -3.5)
+	player.velocity = Vector3.ZERO
+	var forward := InputEventKey.new()
+	forward.keycode = KEY_DOWN
+	forward.pressed = true
+	Input.parse_input_event(forward)
+	for frame in range(150):
+		await physics_frame
+	forward.pressed = false
+	Input.parse_input_event(forward)
+	assert(player.global_position.z > 0.0 and player.global_position.y > 24.0, "Could not walk through the front door")
 	print("Preview smoke: %d meshes, %d grass instances, baked terrain, collision OK" % [meshes.size(), grass.multimesh.instance_count])
 	quit()

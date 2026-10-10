@@ -1,6 +1,8 @@
 extends Node3D
 
 const WALK_SPEED := 2.3
+const SPRINT_MULTIPLIER := 2.0
+const MAX_STEP_HEIGHT := 0.85
 const TELEPORT_RANGE := 15.0
 const MOUSE_SENSITIVITY := 0.002
 const DEADZONE := 0.18
@@ -85,8 +87,11 @@ func _load_preview_from_args() -> void:
 		if mesh_instance.mesh == null:
 			continue
 		var node_name := mesh_instance.name.to_lower()
-		var walkable := _name_has_any(node_name, ["grid", "paving", "floor", "road", "deck"])
-		var solid := walkable or _name_has_any(node_name, ["wall", "door", "column", "pillar"])
+		if glb_path.get_file() == "merchant.glb" and (node_name.begins_with("gate doors") or node_name.begins_with("gate ironwork") or node_name.begins_with("gate straps")):
+			mesh_instance.visible = false
+			continue
+		var walkable := _name_has_any(node_name, ["grid", "paving", "floor", "road", "deck", "stoop"])
+		var solid := walkable or _name_has_any(node_name, ["wall", "column", "pillar"])
 		if not solid:
 			continue
 		var shape := mesh_instance.mesh.create_trimesh_shape()
@@ -200,8 +205,8 @@ func _process_movement(delta: float) -> void:
 		input_vector = left_controller.get_vector2("primary")
 	elif not xr_active:
 		input_vector = Vector2(
-			float(Input.is_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_A)),
-			float(Input.is_key_pressed(KEY_S)) - float(Input.is_key_pressed(KEY_W))
+			float(Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT)) - float(Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT)),
+			float(Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN)) - float(Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP))
 		)
 	if input_vector.length() < DEADZONE:
 		input_vector = Vector2.ZERO
@@ -211,10 +216,41 @@ func _process_movement(delta: float) -> void:
 	var move_direction := facing * Vector3(input_vector.x, 0, input_vector.y)
 	move_direction.y = 0
 	move_direction = move_direction.normalized() * input_vector.length()
-	player.velocity.x = move_direction.x * WALK_SPEED
-	player.velocity.z = move_direction.z * WALK_SPEED
+	var speed := WALK_SPEED * (SPRINT_MULTIPLIER if not xr_active and Input.is_key_pressed(KEY_SHIFT) else 1.0)
+	player.velocity.x = move_direction.x * speed
+	player.velocity.z = move_direction.z * speed
 	player.velocity.y -= 9.8 * delta
+	var was_on_floor := player.is_on_floor()
+	var before := player.global_position
 	player.move_and_slide()
+	if was_on_floor and not move_direction.is_zero_approx():
+		_try_step_up(before, move_direction, speed * delta)
+
+
+func _try_step_up(before: Vector3, direction: Vector3, travel: float) -> void:
+	var actual := player.global_position - before
+	if Vector2(actual.x, actual.z).length() >= travel * 0.8:
+		return
+	var probe_distance := maxf(travel, 0.45)
+	var destination := before + direction * probe_distance
+	var ray_start := destination + Vector3.UP * (MAX_STEP_HEIGHT + 0.2)
+	var ray_end := destination - Vector3.UP * 0.1
+	var query := PhysicsRayQueryParameters3D.create(ray_start, ray_end, 1)
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return
+	var rise: float = hit.position.y - before.y
+	if rise < 0.08 or rise > MAX_STEP_HEIGHT:
+		return
+	# Door stoops can have a raised lip above their walkable center.
+	var raised_origin := before + Vector3.UP * (MAX_STEP_HEIGHT + 0.02)
+	var horizontal := direction * probe_distance
+	if not _destination_is_clear(raised_origin + horizontal):
+		return
+	if player.test_move(Transform3D(player.global_basis, raised_origin), horizontal):
+		return
+	player.global_position = raised_origin + horizontal
+	player.velocity.y = 0.0
 
 
 func _update_teleport_target() -> void:
@@ -262,4 +298,4 @@ func _update_status() -> void:
 		xr_status.text = "WORLDsmith | Right trigger: teleport | X: smooth %s" % ("ON" if smooth_locomotion else "OFF")
 	else:
 		var title := preview_name if not preview_name.is_empty() else "M1 VIEWER"
-		status.text = "WORLDSMITH  •  %s\nWASD move  •  Mouse look  •  Hold right mouse to aim, release to teleport  •  Esc unlock mouse" % title
+		status.text = "WORLDSMITH  •  %s\nWASD / arrows move  •  Shift faster  •  Mouse look  •  Right mouse teleport  •  Esc unlock mouse" % title

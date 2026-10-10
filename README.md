@@ -8,7 +8,7 @@ The Godot 4.6 client imports an original sample GLB hall, runs in desktop debug 
 
 | Mode | Controls |
 | --- | --- |
-| Desktop | WASD move, mouse look, hold right mouse to aim at the floor and release to teleport, Escape releases the mouse, left click captures it again. |
+| Desktop | WASD or arrow keys move; hold Shift to move twice as fast. Mouse look, hold right mouse to aim at the floor and release to teleport, Escape releases the mouse, left click captures it again. |
 | Quest 3 | Right controller trigger aims and teleports on release. X on the left controller toggles smooth locomotion; when enabled, the left thumbstick moves in the direction of your gaze. Physical room movement remains available. |
 
 The green sphere marks a valid floor hit. The small in-headset status label shows the smooth locomotion setting.
@@ -39,7 +39,7 @@ For a local `.blend` file, run:
 
 The optional second argument is the player spawn in Godot `(X,Y,Z)` meters. Blender uses Z up; the GLB exporter maps `(Blender X,Y,Z)` to `(Godot X,Z,-Y)`. Choose a point on a walkable surface. The command exports renderable objects to `client/assets/local/`, imports the GLB, and starts desktop mode. It does not save or modify the `.blend`. The GLB and local preview setting are gitignored. Subsequent desktop runs use that preview; remove `client/assets/local/preview.json` to return to the sample hall.
 
-The preview builds basic collision from meshes named like `Grid`, `Paving`, `Floor`, `Road`, `Deck`, `Wall`, or `Door`. Other meshes remain visual only. To better match Blender, the exporter bakes procedural base colors into textures, applies visible modifiers, and turns repeated Geometry Nodes meshes into Godot `MultiMesh` instances. Procedural bump/roughness, shader-specific effects, and Blender lighting can still differ. The [Blender glTF documentation](https://docs.blender.org/manual/en/5.1/addons/import_export/scene_gltf2.html) describes the format's material and mesh limits.
+The preview builds basic collision from meshes named like `Grid`, `Paving`, `Floor`, `Road`, `Deck`, `Stoop`, `Wall`, `Column`, or `Pillar`. Door frames and leaves remain visual so entrances can be traversed; the merchant preview hides its closed gate leaves and hardware. A small step-up lets the player walk onto raised stoops. Other meshes remain visual only. To better match Blender, the exporter bakes procedural base colors into textures, applies visible modifiers, and turns repeated Geometry Nodes meshes into Godot `MultiMesh` instances. Procedural bump/roughness, shader-specific effects, and Blender lighting can still differ. The [Blender glTF documentation](https://docs.blender.org/manual/en/5.1/addons/import_export/scene_gltf2.html) describes the format's material and mesh limits.
 
 If you export the Quest APK while a local preview is active, the preview GLB and setting are included in that local build. A large Blender environment may need mesh and draw-call optimization before it can meet the Quest frame-rate target.
 
