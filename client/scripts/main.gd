@@ -78,6 +78,7 @@ func _load_preview_from_args() -> void:
 	var preview := packed.instantiate()
 	preview.name = "PreviewWorld"
 	add_child(preview)
+	_load_preview_instances(preview, glb_path.get_basename() + "-instances.json")
 	var collision_count := 0
 	for mesh_node in preview.find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := mesh_node as MeshInstance3D
@@ -101,6 +102,45 @@ func _load_preview_from_args() -> void:
 	player.position = spawn
 	preview_name = glb_path.get_file()
 	print("Preview loaded: %s; %d collision meshes" % [preview_name, collision_count])
+
+
+func _load_preview_instances(preview: Node3D, manifest_path: String) -> void:
+	if not FileAccess.file_exists(manifest_path):
+		return
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(manifest_path))
+	if not parsed is Dictionary:
+		push_error("Invalid preview instance manifest: " + manifest_path)
+		return
+	for group in parsed.get("groups", []):
+		var prototype_scene: PackedScene = load(str(group.get("glb", "")))
+		var transform_file := FileAccess.open(str(group.get("transforms", "")), FileAccess.READ)
+		var count := int(group.get("count", 0))
+		if prototype_scene == null or transform_file == null or count <= 0 or transform_file.get_length() != count * 48:
+			push_error("Invalid preview instance group")
+			continue
+		var prototype_root := prototype_scene.instantiate()
+		var prototype_meshes := prototype_root.find_children("*", "MeshInstance3D", true, false)
+		if prototype_meshes.is_empty():
+			prototype_root.free()
+			continue
+		var prototype: MeshInstance3D = prototype_meshes[0]
+		var multimesh := MultiMesh.new()
+		multimesh.transform_format = MultiMesh.TRANSFORM_3D
+		multimesh.mesh = prototype.mesh
+		multimesh.instance_count = count
+		for index in range(count):
+			var x_axis := Vector3(transform_file.get_float(), transform_file.get_float(), transform_file.get_float())
+			var y_axis := Vector3(transform_file.get_float(), transform_file.get_float(), transform_file.get_float())
+			var z_axis := Vector3(transform_file.get_float(), transform_file.get_float(), transform_file.get_float())
+			var position := Vector3(transform_file.get_float(), transform_file.get_float(), transform_file.get_float())
+			multimesh.set_instance_transform(index, Transform3D(Basis(x_axis, y_axis, z_axis), position))
+		var instance_node := MultiMeshInstance3D.new()
+		instance_node.name = "PreviewInstances"
+		instance_node.multimesh = multimesh
+		instance_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		preview.add_child(instance_node)
+		prototype_root.free()
+		print("Preview instances: %d" % count)
 
 
 func _name_has_any(value: String, words: Array[String]) -> bool:

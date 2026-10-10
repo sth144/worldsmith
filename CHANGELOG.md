@@ -12,3 +12,4 @@
 - A repository launcher that finds Godot or fetches the pinned macOS editor when it is absent.
 - Local Blender-to-GLB preview with a configurable spawn and generated walkable collision.
 - Daylight ambient fill for readable shadowed areas in imported environments.
+- Higher-fidelity local Blender previews with baked procedural colors, visible modifiers, and Geometry Nodes instances rendered through MultiMesh.

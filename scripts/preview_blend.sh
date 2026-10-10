@@ -31,7 +31,7 @@ export_log="${local_dir}/${name}-export.log"
 import_log="${local_dir}/${name}-import.log"
 
 echo "Exporting ${name}.blend to a local GLB..."
-if ! blender --background "$blend_file" --python "${repo_root}/scripts/export_preview.py" -- "$glb_file" > "$export_log" 2>&1; then
+if ! blender --background "$blend_file" --python-exit-code 1 --python "${repo_root}/scripts/export_preview.py" -- "$glb_file" > "$export_log" 2>&1; then
     tail -40 "$export_log" >&2
     exit 1
 fi
