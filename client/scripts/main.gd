@@ -5,6 +5,8 @@ const SPRINT_MULTIPLIER := 2.0
 const MAX_STEP_HEIGHT := 0.85
 const TELEPORT_RANGE := 15.0
 const MOUSE_SENSITIVITY := 0.002
+const KEYBOARD_YAW_SPEED := 1.8
+const KEYBOARD_PITCH_SPEED := 1.3
 const DEADZONE := 0.18
 
 @onready var player: CharacterBody3D = $Player
@@ -203,8 +205,20 @@ func _physics_process(delta: float) -> void:
 		_process_xr_input()
 	else:
 		aiming = Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
+		_process_desktop_look(delta)
 	_process_movement(delta)
 	_update_teleport_target()
+
+
+func _process_desktop_look(delta: float) -> void:
+	var yaw_input := float(Input.is_key_pressed(KEY_LEFT)) - float(Input.is_key_pressed(KEY_RIGHT))
+	var pitch_input := float(Input.is_key_pressed(KEY_UP)) - float(Input.is_key_pressed(KEY_DOWN))
+	if yaw_input == 0.0 and pitch_input == 0.0:
+		return
+	mouse_yaw += yaw_input * KEYBOARD_YAW_SPEED * delta
+	mouse_pitch = clampf(mouse_pitch + pitch_input * KEYBOARD_PITCH_SPEED * delta, -1.45, 1.45)
+	player.rotation.y = mouse_yaw
+	desktop_camera.rotation.x = mouse_pitch
 
 
 func _process_xr_input() -> void:
@@ -228,8 +242,8 @@ func _process_movement(delta: float) -> void:
 		input_vector = left_controller.get_vector2("primary")
 	elif not xr_active:
 		input_vector = Vector2(
-			float(Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT)) - float(Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT)),
-			float(Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN)) - float(Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP))
+			float(Input.is_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_A)),
+			float(Input.is_key_pressed(KEY_S)) - float(Input.is_key_pressed(KEY_W))
 		)
 	if input_vector.length() < DEADZONE:
 		input_vector = Vector2.ZERO
@@ -321,4 +335,4 @@ func _update_status() -> void:
 		xr_status.text = "WORLDsmith | Right trigger: teleport | X: smooth %s" % ("ON" if smooth_locomotion else "OFF")
 	else:
 		var title := preview_name if not preview_name.is_empty() else "M1 VIEWER"
-		status.text = "WORLDSMITH  •  %s\nWASD / arrows move  •  Shift faster  •  Mouse look  •  Right mouse teleport  •  Esc unlock mouse" % title
+		status.text = "WORLDSMITH  •  %s\nWASD move  •  Arrows look  •  Shift faster  •  Mouse look  •  Right mouse teleport  •  Esc unlock mouse" % title

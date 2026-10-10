@@ -29,7 +29,7 @@ func _check() -> void:
 	player.global_position = Vector3(13.1, 23.4, -3.5)
 	player.velocity = Vector3.ZERO
 	var forward := InputEventKey.new()
-	forward.keycode = KEY_DOWN
+	forward.keycode = KEY_S
 	forward.pressed = true
 	Input.parse_input_event(forward)
 	for frame in range(150):

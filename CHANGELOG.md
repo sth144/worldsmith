@@ -13,5 +13,6 @@
 - Local Blender-to-GLB preview with a configurable spawn and generated walkable collision.
 - Daylight ambient fill for readable shadowed areas in imported environments.
 - Higher-fidelity local Blender previews with baked procedural colors, visible modifiers, and Geometry Nodes instances rendered through MultiMesh.
-- Desktop arrow-key movement and Shift sprinting; walkable merchant entrances with step-up handling and an open gate in the preview.
+- Desktop Shift sprinting; walkable merchant entrances with step-up handling and an open gate in the preview.
+- Desktop arrow-key view control alongside WASD movement and mouse look.
 - Contact shading and fill lights that separate flat architectural surfaces in the merchant preview.

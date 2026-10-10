@@ -8,7 +8,7 @@ The Godot 4.6 client imports an original sample GLB hall, runs in desktop debug 
 
 | Mode | Controls |
 | --- | --- |
-| Desktop | WASD or arrow keys move; hold Shift to move twice as fast. Mouse look, hold right mouse to aim at the floor and release to teleport, Escape releases the mouse, left click captures it again. |
+| Desktop | WASD moves; arrow keys turn and tilt the view. Hold Shift to move twice as fast. Mouse look remains available. Hold right mouse to aim at the floor and release to teleport; Escape releases the mouse, and left click captures it again. |
 | Quest 3 | Right controller trigger aims and teleports on release. X on the left controller toggles smooth locomotion; when enabled, the left thumbstick moves in the direction of your gaze. Physical room movement remains available. |
 
 The green sphere marks a valid floor hit. The small in-headset status label shows the smooth locomotion setting.
