@@ -26,6 +26,72 @@ PLACEABLE = {"chair": "Chair", "table": "Table", "planter": "Planter", "lantern"
              "hill": "Hill", "tree": "Tree"}
 
 
+def is_placement_request(prompt: str) -> bool:
+    words = prompt.lower()
+    named_asset = any(re.search(r"\b" + key + r"s?\b", words) for key in PLACEABLE)
+    return bool(named_asset and (re.search(r"\b(add|put|place|plant|build|create|spawn)\b", words)
+                                 or "hill" in words and "tree" in words))
+
+
+def resolve_aimed_target(prompt: str, aimed_id: str | None, view: dict | None,
+                         scene: dict) -> tuple[str | None, str]:
+    """Resolve a described, visible prop before falling back to the aimed prop."""
+    objects = {obj["id"]: obj for obj in scene["objects"]}
+    if aimed_id is not None and aimed_id not in objects:
+        raise HTTPException(422, "Aimed object no longer exists; reopen Ask AI")
+    words = prompt.lower()
+    named_assets = [key for key in PLACEABLE if re.search(r"\b" + key + r"s?\b", words)]
+    describes_existing = bool(re.search(r"\b(delete|remove|discard|hide|duplicate|copy|move|rotate|scale)\b|get rid", words))
+    named_colors = ([name for name in COLORS if re.search(r"\b" + name + r"\b", words)]
+                    if describes_existing else [])
+    if not named_assets and not named_colors:
+        return aimed_id, "aimed" if aimed_id else "none"
+
+    def matches(obj: dict) -> bool:
+        if named_assets and obj["asset"].removeprefix("assets/").removesuffix(".glb").split("-v-")[0] not in named_assets:
+            return False
+        if not named_colors:
+            return True
+        metadata = obj.get("metadata", {})
+        colors = [metadata.get("material_color")]
+        overrides = metadata.get("material_overrides", {})
+        if isinstance(overrides, dict):
+            colors += list(overrides.values())
+        for color in colors:
+            if not isinstance(color, list) or len(color) < 3:
+                continue
+            try:
+                if any(sum((float(color[i]) - COLORS[name][i]) ** 2 for i in range(3)) < 0.08
+                       for name in named_colors):
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    candidates = [obj for obj in objects.values() if matches(obj)]
+    if view is not None:
+        camera, direction = view["camera_position"], view["camera_direction"]
+        candidates = [obj for obj in candidates if _in_view(obj, camera, direction)]
+    else:
+        candidates = [obj for obj in candidates if obj["id"] == aimed_id]
+    if aimed_id is not None and any(obj["id"] == aimed_id for obj in candidates):
+        return aimed_id, "aimed"
+    if len(candidates) == 1:
+        return candidates[0]["id"], "described in view"
+    if len(candidates) > 1:
+        raise HTTPException(422, "Several objects match; aim at the one you mean")
+    if named_colors or named_assets:
+        raise HTTPException(422, "No aimed or visible placed object matches that description")
+    return aimed_id, "aimed" if aimed_id else "none"
+
+
+def _in_view(obj: dict, camera: list[float], direction: list[float]) -> bool:
+    center = [obj["position"][0], obj["position"][1] + 0.6, obj["position"][2]]
+    offset = [a - b for a, b in zip(center, camera)]
+    distance = math.sqrt(sum(item * item for item in offset))
+    return 0.1 < distance <= 30 and sum(a * b for a, b in zip(offset, direction)) / distance > 0.3
+
+
 def placement(asset_key: str, position: list[float], name: str | None = None,
               scale: list[float] | None = None) -> dict:
     return {"type": "add_object", "object": {
@@ -87,6 +153,8 @@ def deterministic_plan(prompt: str, selected: list[dict]) -> list[dict] | None:
     words = prompt.lower()
     if not selected:
         return None
+    if re.search(r"\b(delete|remove|discard)\b|get rid of", words):
+        return [{"type": "delete_object", "object_id": obj["id"]} for obj in selected]
     if ("duplicate" in words or "copy" in words) and not any(phrase in words for phrase in ("along", "row", "line", "across")):
         return [{"type": "duplicate_object", "object_id": obj["id"], "new_id": str(uuid4())} for obj in selected]
     if "hide" in words or "show" in words:

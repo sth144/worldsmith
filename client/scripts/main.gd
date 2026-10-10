@@ -44,7 +44,8 @@ var selection_outline: MeshInstance3D
 var xr_pointer: MeshInstance3D
 var prompt_view: Dictionary = {}
 var inventory_view: Dictionary = {}
-var prompt_for_view := false
+var inventory_focus_id := ""
+var prompt_target_id := ""
 
 
 func _ready() -> void:
@@ -451,6 +452,7 @@ func _toggle_inventory() -> void:
 func _set_inventory(value: bool) -> void:
 	if value:
 		inventory_view = _view_context()
+		inventory_focus_id = _object_under_ray()
 	if value and _is_editing():
 		_cancel_edit()
 	aiming = false
@@ -464,11 +466,16 @@ func _on_edit_action(action: String) -> void:
 		scene_sync.approve_geometry()
 		_set_inventory(false)
 		return
-	if action == "ask_ai" or action == "ask_ai_here":
-		prompt_for_view = action == "ask_ai_here" or selected_id.is_empty()
-		prompt_view = inventory_view if prompt_for_view else {}
+	if action == "ai_details":
 		_set_inventory(false)
-		prompt_panel.open(xr_active, xr_camera if xr_active else desktop_camera, prompt_for_view)
+		prompt_panel.show_result(xr_active, xr_camera if xr_active else desktop_camera, scene_sync.last_agent_details)
+		return
+	if action == "ask_ai":
+		prompt_target_id = selected_id if not selected_id.is_empty() else inventory_focus_id
+		prompt_view = inventory_view
+		var context := "Selected object" if not selected_id.is_empty() else ("Aimed object" if not prompt_target_id.is_empty() else "Viewed ground")
+		_set_inventory(false)
+		prompt_panel.open(xr_active, xr_camera if xr_active else desktop_camera, context)
 		return
 	if action.begins_with("place:"):
 		_start_place(action.trim_prefix("place:"))
@@ -504,12 +511,13 @@ func _on_edit_action(action: String) -> void:
 
 
 func _on_prompt_submitted(prompt: String) -> void:
-	if prompt_for_view and not prompt_view.is_empty():
-		scene_sync.request_agent(prompt, [], prompt_view)
-	elif not prompt_for_view and not selected_id.is_empty():
-		scene_sync.request_agent(prompt, [selected_id])
+	if not prompt_target_id.is_empty() or not prompt_view.is_empty():
+		var targets: Array[String] = []
+		if not selected_id.is_empty():
+			targets.append(selected_id)
+		scene_sync.request_agent(prompt, targets, prompt_view, prompt_target_id if selected_id.is_empty() else "")
 	else:
-		scene_sync.last_error = "Look down at a floor point, then open Ask AI"
+		scene_sync.last_error = "Aim at a placed object or look at a floor point, then open Ask AI"
 		scene_sync.status_changed.emit()
 	_update_status()
 

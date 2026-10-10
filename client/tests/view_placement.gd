@@ -15,9 +15,36 @@ func _check() -> void:
 	if world.inventory_view.is_empty():
 		_fail("Inventory did not capture the viewed floor point")
 		return
-	world._on_edit_action("ask_ai_here")
-	if not world.prompt_panel.is_open or not world.prompt_for_view:
-		_fail("View prompt did not open")
+	world._on_edit_action("ask_ai")
+	if not world.prompt_panel.is_open or world.prompt_view.is_empty():
+		_fail("Single AI prompt did not capture the viewed ground")
+		return
+	world.prompt_panel.close()
+	world._on_edit_action("ai_details")
+	if not world.prompt_panel.is_open or not world.prompt_panel.result_mode:
+		_fail("AI output viewer did not open")
+		return
+	world.prompt_panel.close()
+	world.prompt_panel.show_result(true, world.desktop_camera, "Structured output: " + "x".repeat(800))
+	if world.prompt_panel.result_pages.size() < 2:
+		_fail("Spatial AI output did not paginate")
+		return
+	world.prompt_panel.hovered = "NEXT"
+	world.prompt_panel.activate_hovered()
+	if world.prompt_panel.result_page != 1:
+		_fail("Spatial AI output page control failed")
+		return
+	world.prompt_panel.close()
+	var chair_id := editor.add_object("chair", Transform3D(Basis.IDENTITY, Vector3(0, 0, 2)))
+	world.desktop_camera.rotation.x = -0.25
+	await physics_frame
+	world._toggle_inventory()
+	if world.inventory_focus_id != chair_id:
+		_fail("Inventory did not capture the chair under the crosshair")
+		return
+	world._on_edit_action("ask_ai")
+	if world.prompt_target_id != chair_id:
+		_fail("AI prompt did not target the aimed chair")
 		return
 	world.prompt_panel.close()
 	var hill_id := editor.add_object("hill", Transform3D.IDENTITY)

@@ -76,11 +76,58 @@ def test_view_prompt_places_hill_and_tree_as_one_undoable_edit(tmp_path):
     assert len(TestClient(create_app(tmp_path / "projects")).get("/api/scenes/demo").json()["objects"]) == 2
 
 
+def test_aimed_chair_can_be_removed_or_used_as_placement_context(tmp_path):
+    client = TestClient(create_app(tmp_path / "projects"))
+    chair_id = str(uuid4())
+    assert client.post("/api/scenes/demo/operations", json={
+        "expected_revision": 0, "operations": [{"type": "add_object", "object": chair(chair_id)}],
+    }).status_code == 200
+    view = {"camera_position": [0, 1.7, 0], "camera_direction": [0, -0.5, -0.8660254],
+            "target_position": [0, 0, -3]}
+    removed = client.post("/api/scenes/demo/agent", json={
+        "expected_revision": 1, "prompt": "Get rid of the red chair", "selected_object_ids": [chair_id],
+        "view": view,
+    })
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["planner"] == "local"
+    assert removed.json()["operations"] == [{"type": "delete_object", "object_id": chair_id}]
+    assert client.get("/api/scenes/demo").json()["objects"] == []
+    assert client.post("/api/scenes/demo/undo", json={"expected_revision": 2}).status_code == 200
+    placed = client.post("/api/scenes/demo/agent", json={
+        "expected_revision": 3, "prompt": "Put a hill here with a tree on it",
+        "selected_object_ids": [chair_id], "view": view,
+    })
+    assert placed.status_code == 200, placed.text
+    assert len(client.get("/api/scenes/demo").json()["objects"]) == 3
+
+
+def test_described_red_chair_wins_over_overlapping_brown_chair(tmp_path):
+    client = TestClient(create_app(tmp_path / "projects"))
+    brown_id, red_id = str(uuid4()), str(uuid4())
+    brown = {**chair(brown_id), "position": [1, 0, -3]}
+    red = {**chair(red_id), "position": [0, 0, -3],
+           "metadata": {"material_color": [0.85, 0.08, 0.06, 1]}}
+    assert client.post("/api/scenes/demo/operations", json={
+        "expected_revision": 0, "operations": [
+            {"type": "add_object", "object": brown}, {"type": "add_object", "object": red}],
+    }).status_code == 200
+    view = {"camera_position": [0, 1.7, 0], "camera_direction": [0, -0.5, -0.8660254],
+            "target_position": [0, 0, -3]}
+    result = client.post("/api/scenes/demo/agent", json={
+        "expected_revision": 1, "prompt": "Get rid of the red chair", "selected_object_ids": [],
+        "aimed_object_id": brown_id, "view": view,
+    })
+    assert result.status_code == 200, result.text
+    assert result.json()["target_source"] == "described in view"
+    assert result.json()["operations"] == [{"type": "delete_object", "object_id": red_id}]
+    assert [obj["id"] for obj in client.get("/api/scenes/demo").json()["objects"]] == [brown_id]
+
+
 def test_view_prompt_needs_valid_target_and_cannot_place_outside_view(tmp_path, monkeypatch):
     client = TestClient(create_app(tmp_path / "projects"))
     base = {"expected_revision": 0, "prompt": "Put a hill here", "selected_object_ids": []}
     assert client.post("/api/scenes/demo/agent", json=base).status_code == 422
-    view = {"camera_position": [0, 1.7, 0], "camera_direction": [0, -1, 0],
+    view = {"camera_position": [0, 1.7, 0], "camera_direction": [0, -0.5, -0.8660254],
             "target_position": [0, 0, -3]}
     assert client.post("/api/scenes/demo/agent", json={**base, "view": {
         **view, "target_position": [0, 0, -31]}}).status_code == 422
@@ -91,7 +138,7 @@ def test_view_prompt_needs_valid_target_and_cannot_place_outside_view(tmp_path, 
 
     monkeypatch.setattr("app.main.codex_view_plan", bad_plan)
     response = client.post("/api/scenes/demo/agent", json={**base,
-        "prompt": "Something elaborate", "view": view})
+        "prompt": "Build a row of chairs", "view": view})
     assert response.status_code == 422
     assert client.get("/api/scenes/demo").json()["revision"] == 0
 

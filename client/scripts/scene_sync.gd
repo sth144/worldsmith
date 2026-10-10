@@ -24,6 +24,8 @@ var server_objects: Dictionary = {}
 var pending: Array[Dictionary] = []
 var last_error := ""
 var agent_busy := false
+var last_agent_prompt := ""
+var last_agent_details := "No AI request yet."
 var agent_request: HTTPRequest
 var downloading: Dictionary = {}
 var geometry_job_id := ""
@@ -289,27 +291,35 @@ func status_text() -> String:
 	return "Offline — %d edit(s) queued" % pending.size()
 
 
-func request_agent(prompt: String, selected_ids: Array[String], view: Dictionary = {}) -> void:
+func request_agent(prompt: String, selected_ids: Array[String], view: Dictionary = {}, aimed_id: String = "") -> void:
+	last_agent_prompt = prompt
 	if disabled or not online or agent_busy or not pending.is_empty():
 		last_error = "Connect and save edits before asking AI"
+		last_agent_details = "Request: " + prompt + "\n" + last_error
 		status_changed.emit()
 		return
 	var endpoint := server_url.replace("ws://", "http://").replace("wss://", "https://")
 	var payload := {"expected_revision": revision, "prompt": prompt, "selected_object_ids": selected_ids}
+	if not aimed_id.is_empty():
+		payload["aimed_object_id"] = aimed_id
 	if not view.is_empty():
 		payload["view"] = view
 	var error := agent_request.request(endpoint + "/api/scenes/" + scene_id + "/agent", ["Content-Type: application/json"], HTTPClient.METHOD_POST, JSON.stringify(payload))
 	if error != OK:
 		last_error = "Could not send AI request"
+		last_agent_details = "Request: " + prompt + "\n" + last_error
 	else:
 		agent_busy = true
 		last_error = ""
+		last_agent_details = "Request: " + prompt + "\nWorking…"
 	status_changed.emit()
 
 
 func _on_agent_result(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	agent_busy = false
 	var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
+	var response_text := JSON.stringify(parsed, "  ") if parsed != null else body.get_string_from_utf8()
+	last_agent_details = "Request: %s\nHTTP %d\n%s" % [last_agent_prompt, code, response_text]
 	if result != HTTPRequest.RESULT_SUCCESS or code != 200:
 		last_error = str(parsed.get("detail", "AI request failed")) if parsed is Dictionary else "AI request failed"
 	else:

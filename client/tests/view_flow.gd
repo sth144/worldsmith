@@ -15,8 +15,21 @@ func _check() -> void:
 		return
 	var view := {"camera_position": [0, 1.7, 0], "camera_direction": [0, -0.5, -0.8660254],
 		"target_position": [0, 0, -3]}
+	var chair_id := editor.add_object("chair", Transform3D.IDENTITY)
+	if not await _wait_for(func() -> bool: return sync.revision == 1 and sync.pending.is_empty(), 300):
+		_fail("Chair was not saved")
+		return
+	world.prompt_target_id = chair_id
+	world.prompt_view = view
+	world._on_prompt_submitted("Get rid of this chair")
+	if not await _wait_for(func() -> bool: return sync.revision == 2 and not sync.agent_busy, 600):
+		_fail("Aimed chair was not removed: " + sync.last_error)
+		return
+	if not editor.objects.is_empty() or not sync.last_agent_details.contains("delete_object"):
+		_fail("Chair removal or AI output is missing")
+		return
 	sync.request_agent("Put a hill here with a tree on it", [], view)
-	if not await _wait_for(func() -> bool: return sync.revision == 1 and not sync.agent_busy, 600):
+	if not await _wait_for(func() -> bool: return sync.revision == 3 and not sync.agent_busy, 600):
 		_fail("View prompt was not saved: " + sync.last_error)
 		return
 	if editor.objects.size() != 2:
@@ -29,10 +42,14 @@ func _check() -> void:
 		_fail("View placements use wrong assets")
 		return
 	editor.undo()
-	if not await _wait_for(func() -> bool: return sync.revision == 2 and editor.objects.is_empty(), 300):
+	if not await _wait_for(func() -> bool: return sync.revision == 4 and editor.objects.is_empty(), 300):
 		_fail("One undo did not remove the arrangement")
 		return
-	print("View flow: prompt, scene sync, two assets, one undo OK")
+	sync.request_agent("I want a castle", [], view)
+	if not await _wait_for(func() -> bool: return not sync.agent_busy and sync.last_agent_details.contains("HTTP 422"), 300):
+		_fail("Rejected AI request was not visible in output details")
+		return
+	print("AI flow: aimed removal, visible output, view placement, one undo OK")
 	quit()
 
 

@@ -8,6 +8,7 @@ const KEY_STEP := 0.125
 
 var is_open := false
 var xr_active := false
+var result_mode := false
 var text_value := ""
 var hovered := ""
 var hover_point := Vector3.ZERO
@@ -18,38 +19,73 @@ var desktop_panel: PanelContainer
 var desktop_input: LineEdit
 var desktop_title: Label
 var xr_title: Label3D
+var desktop_result_panel: PanelContainer
+var desktop_result_text: TextEdit
+var xr_result_panel: Node3D
+var xr_result_text: Label3D
+var xr_result_footer: Label3D
+var result_pages: Array[String] = []
+var result_page := 0
 
 
 func _ready() -> void:
 	_build_desktop()
 	_build_xr()
+	_build_result()
 
 
-func open(xr: bool, camera: Camera3D, view_mode: bool = false) -> void:
+func open(xr: bool, camera: Camera3D, context: String = "Viewed ground") -> void:
 	is_open = true
 	xr_active = xr
-	desktop_title.text = "Ask AI about the viewed point" if view_mode else "Ask AI to edit the selected object"
-	xr_title.text = "ASK AI  /  VIEWED POINT" if view_mode else "ASK AI  /  SELECTED OBJECT"
-	desktop_input.placeholder_text = "Put a hill here with a tree on it" if view_mode else "Make this chair twice as wide"
+	result_mode = false
+	desktop_title.text = "Ask AI · " + context
+	xr_title.text = "ASK AI  /  " + context.to_upper()
+	desktop_input.placeholder_text = "Describe a change or addition"
 	text_value = ""
 	_update_text()
+	desktop_result_panel.visible = false
+	xr_result_panel.visible = false
 	desktop_panel.visible = not xr
 	xr_panel.visible = xr
 	if xr:
-		var forward := -camera.global_basis.z
-		forward.y = 0.0
-		forward = forward.normalized()
-		xr_panel.global_position = camera.global_position + forward * 1.3
-		xr_panel.global_basis = Basis.looking_at(forward, Vector3.UP)
+		_position_xr(xr_panel, camera)
 	else:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		desktop_input.grab_focus()
+
+
+func show_result(xr: bool, camera: Camera3D, details: String) -> void:
+	is_open = true
+	xr_active = xr
+	result_mode = true
+	desktop_panel.visible = false
+	xr_panel.visible = false
+	desktop_result_text.text = details
+	desktop_result_panel.visible = not xr
+	xr_result_panel.visible = xr
+	result_pages = _paginate(details)
+	result_page = 0
+	_refresh_result_page()
+	if xr:
+		_position_xr(xr_result_panel, camera)
+	else:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _position_xr(panel: Node3D, camera: Camera3D) -> void:
+	var forward := -camera.global_basis.z
+	forward.y = 0.0
+	forward = forward.normalized()
+	panel.global_position = camera.global_position + forward * 1.3
+	panel.global_basis = Basis.looking_at(forward, Vector3.UP)
 
 
 func close() -> void:
 	is_open = false
 	desktop_panel.visible = false
 	xr_panel.visible = false
+	desktop_result_panel.visible = false
+	xr_result_panel.visible = false
 	if not xr_active:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -58,17 +94,22 @@ func update_hover(ray_origin: Vector3, ray_direction: Vector3) -> bool:
 	hovered = ""
 	if not is_open or not xr_active:
 		return false
-	var normal := xr_panel.global_basis.z
+	var panel: Node3D = xr_result_panel if result_mode else xr_panel
+	var normal := panel.global_basis.z
 	var denominator := ray_direction.dot(normal)
 	if denominator > -0.05:
 		_color_keys()
 		return false
-	var distance := (xr_panel.global_position - ray_origin).dot(normal) / denominator
+	var distance := (panel.global_position - ray_origin).dot(normal) / denominator
 	if distance < 0.0 or distance > 3.0:
 		_color_keys()
 		return false
 	hover_point = ray_origin + ray_direction * distance
-	var local := xr_panel.to_local(hover_point)
+	var local := panel.to_local(hover_point)
+	if result_mode:
+		if absf(local.x) <= 0.68 and local.y < -0.41 and local.y > -0.62:
+			hovered = "PREV" if local.x < -0.22 else ("NEXT" if local.x < 0.22 else "CLOSE")
+		return true
 	if absf(local.x) > 0.68 or absf(local.y) > 0.54:
 		_color_keys()
 		return false
@@ -93,6 +134,17 @@ func update_hover(ray_origin: Vector3, ray_direction: Vector3) -> bool:
 
 
 func activate_hovered() -> void:
+	if result_mode:
+		match hovered:
+			"PREV":
+				result_page = maxi(0, result_page - 1)
+				_refresh_result_page()
+			"NEXT":
+				result_page = mini(result_pages.size() - 1, result_page + 1)
+				_refresh_result_page()
+			"CLOSE":
+				close()
+		return
 	match hovered:
 		"BACK":
 			text_value = text_value.substr(0, maxi(0, text_value.length() - 1))
@@ -173,6 +225,82 @@ func _build_xr() -> void:
 	key_labels["SPACE"] = _add_label("SPACE", Vector3(-0.16, -0.35, 0.018), 25)
 	key_labels["SEND"] = _add_label("SEND", Vector3(0.37, -0.35, 0.018), 25)
 	key_labels["CANCEL"] = _add_label("CANCEL", Vector3(-0.13, -0.49, 0.018), 21)
+
+
+func _build_result() -> void:
+	desktop_result_panel = PanelContainer.new()
+	desktop_result_panel.position = Vector2(260, 110)
+	desktop_result_panel.custom_minimum_size = Vector2(760, 540)
+	desktop_result_panel.visible = false
+	desktop_panel.get_parent().add_child(desktop_result_panel)
+	var rows := VBoxContainer.new()
+	desktop_result_panel.add_child(rows)
+	var heading := Label.new()
+	heading.text = "AI output · structured proposal and server response"
+	rows.add_child(heading)
+	desktop_result_text = TextEdit.new()
+	desktop_result_text.editable = false
+	desktop_result_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	rows.add_child(desktop_result_text)
+	var close_button := Button.new()
+	close_button.text = "Close"
+	close_button.pressed.connect(close)
+	rows.add_child(close_button)
+
+	xr_result_panel = Node3D.new()
+	xr_result_panel.visible = false
+	add_child(xr_result_panel)
+	var background := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(1.42, 1.22, 0.025)
+	background.mesh = box
+	var surface := StandardMaterial3D.new()
+	surface.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	surface.albedo_color = Color(0.035, 0.055, 0.085, 0.97)
+	surface.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	surface.no_depth_test = true
+	background.material_override = surface
+	xr_result_panel.add_child(background)
+	xr_result_panel.add_child(_result_label("AI OUTPUT", Vector3(-0.62, 0.50, 0.018), 27))
+	xr_result_text = _result_label("", Vector3(-0.62, 0.38, 0.018), 19)
+	xr_result_panel.add_child(xr_result_text)
+	xr_result_footer = _result_label("", Vector3(-0.62, -0.34, 0.018), 20)
+	xr_result_panel.add_child(xr_result_footer)
+	xr_result_panel.add_child(_result_label("PREV", Vector3(-0.53, -0.52, 0.018), 24))
+	xr_result_panel.add_child(_result_label("NEXT", Vector3(-0.11, -0.52, 0.018), 24))
+	xr_result_panel.add_child(_result_label("CLOSE", Vector3(0.31, -0.52, 0.018), 24))
+
+
+func _result_label(value: String, location: Vector3, size: int) -> Label3D:
+	var label := Label3D.new()
+	label.text = value
+	label.position = location
+	label.font_size = size
+	label.pixel_size = 0.002
+	label.no_depth_test = true
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	return label
+
+
+func _paginate(details: String) -> Array[String]:
+	var lines: Array[String] = []
+	for raw_line in details.left(16000).split("\n", true):
+		var remaining := str(raw_line)
+		while remaining.length() > 54:
+			lines.append(remaining.substr(0, 54))
+			remaining = remaining.substr(54)
+		lines.append(remaining)
+	var pages: Array[String] = []
+	for index in range(0, lines.size(), 11):
+		pages.append("\n".join(lines.slice(index, mini(index + 11, lines.size()))))
+	if pages.is_empty():
+		pages.append("No output")
+	return pages
+
+
+func _refresh_result_page() -> void:
+	xr_result_text.text = result_pages[result_page]
+	xr_result_footer.text = "Page %d / %d" % [result_page + 1, result_pages.size()]
 
 
 func _add_label(value: String, location: Vector3, size: int) -> Label3D:

@@ -14,7 +14,7 @@ The FastAPI server keeps `scene.json` and `history.json` in `data/projects/<scen
 
 1. **VR client:** spatial and desktop inventories, prompt entry, server synchronization, and runtime download of versioned GLBs.
 2. **Scene server:** authoritative scene graph, atomic snapshots, revision checks, history, WebSocket deltas, validated agent edits, geometry approvals, and export endpoints.
-3. **AI editing:** direct deterministic requests or read-only Codex CLI JSON proposals. Selected-object proposals can edit only the selection. View proposals can add only catalog assets within five meters of a camera gaze point captured from floor collision; both pass through the same operation validator and scene store.
+3. **AI editing:** direct deterministic requests or read-only Codex CLI JSON proposals. A selected or aimed placed object can be edited. Placement requests add only catalog assets within five meters of a camera gaze point captured from floor collision; both paths use the same operation validator and scene store. The client retains the latest structured response for an optional desktop or spatial output panel.
 4. **Geometry:** fixed Blender scripts run only after approval against a copied asset in a temporary directory. A new immutable GLB version replaces the object's asset reference; previous versions remain for undo. Arbitrary generated scripts are disabled.
 5. **Export:** the registered base environment and visible scene objects are composed in Blender. The merchant preview's instance sidecars are included. A manifest records source hashes.
 

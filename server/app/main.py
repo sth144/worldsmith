@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .assets import asset_path, glb_material_names, list_assets
-from .agent import codex_plan, codex_view_plan, deterministic_plan, deterministic_view_plan, validate_proposal
+from .agent import codex_plan, codex_view_plan, deterministic_plan, deterministic_view_plan, is_placement_request, resolve_aimed_target, validate_proposal
 from .export import export_scene, source_manifest
 from .geometry import create_proposal, interpret_geometry, read_job, run_geometry
 from .history import write_json
@@ -41,6 +41,7 @@ class AgentRequest(BaseModel):
     expected_revision: int = Field(ge=0)
     prompt: str = Field(min_length=3, max_length=1000)
     selected_object_ids: list[str] = Field(default_factory=list, max_length=16)
+    aimed_object_id: str | None = None
     view: dict[str, Any] | None = None
 
 
@@ -68,7 +69,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     root = data_dir or Path(os.environ.get("WORLDSMITH_DATA_DIR", REPO / "data")) / "projects"
     store = SceneStore(root, REPO / "projects" / "demo")
     connections = Connections()
-    app = FastAPI(title="Worldsmith Scene Server", version="0.7.0")
+    app = FastAPI(title="Worldsmith Scene Server", version="0.7.1")
     app.state.store = store
 
     @app.get("/api/scenes/{scene_id}")
@@ -95,14 +96,27 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             object_id not in by_id for object_id in body.selected_object_ids
         ):
             raise HTTPException(422, "Select existing objects")
-        view = validate_view(body.view) if not body.selected_object_ids else None
+        context_view = validate_view(body.view) if body.view is not None else None
+        if is_placement_request(body.prompt) and context_view is None:
+            raise HTTPException(422, "Look at a floor point to place objects")
+        place_in_view = context_view is not None and is_placement_request(body.prompt)
+        view = context_view if place_in_view else None
+        target_ids = list(body.selected_object_ids)
+        target_source = "view" if place_in_view else ("selected" if target_ids else "none")
+        if not place_in_view and not target_ids:
+            resolved_id, target_source = resolve_aimed_target(body.prompt, body.aimed_object_id,
+                                                               context_view, scene)
+            if resolved_id is None:
+                raise HTTPException(422, "Aim at a placed object or describe a catalog object to add")
+            target_ids = [resolved_id]
         selected = []
-        for object_id in body.selected_object_ids:
+        for object_id in target_ids:
             obj = by_id[object_id].copy()
             obj["available_materials"] = sorted(glb_material_names(store.project(scene_id) / obj["asset"]))
             selected.append(obj)
         operations = (deterministic_view_plan(body.prompt, view["target_position"]) if view is not None
                       else deterministic_plan(body.prompt, selected))
+        planner = "local" if operations is not None else "codex"
         if operations is None:
             if view is not None:
                 operations = await codex_view_plan(body.prompt, view, scene)
@@ -112,14 +126,14 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                     if len(selected) != 1:
                         raise HTTPException(422, "Select one object for a geometry edit")
                     job = create_proposal(store.project(scene_id), scene, selected[0]["id"], body.prompt, geometry_spec)
-                    return {"status": "approval_required", "job": job}
+                    return {"status": "approval_required", "job": job, "planner": "geometry template"}
                 operations = await codex_plan(body.prompt, selected, scene)
         assets = {item["path"] for item in list_assets(store.project(scene_id))}
-        validate_proposal(operations, scene, body.selected_object_ids, assets,
+        validate_proposal(operations, scene, target_ids, assets,
                           view["target_position"] if view is not None else None)
         result = store.apply(scene_id, body.expected_revision, operations)
         await connections.broadcast(scene_id, {"type": "delta", **result})
-        return {"operations": operations, **result}
+        return {"planner": planner, "target_source": target_source, "operations": operations, **result}
 
     @app.get("/api/scenes/{scene_id}/geometry/{job_id}")
     def get_geometry_job(scene_id: str, job_id: str) -> dict:
