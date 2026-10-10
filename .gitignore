@@ -6,3 +6,8 @@ build/
 client/assets/local/
 client/android/
 client/tests/*.gd.uid
+data/
+server/.venv/
+server/.pytest_cache/
+server/**/__pycache__/
+client/server.json

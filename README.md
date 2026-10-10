@@ -1,6 +1,6 @@
 # Worldsmith
 
-Worldsmith is an open-source, self-hosted VR environment editor for Meta Quest 3. The intended experience is to edit an environment while standing inside it. This repository contains **Milestone 2: local in-world object editing**. Scene persistence, the server, and AI editing are planned for later milestones.
+Worldsmith is an open-source, self-hosted VR environment editor for Meta Quest 3. The intended experience is to edit an environment while standing inside it. This repository contains **Milestone 3: persistent scene editing**. AI editing and complete scene export are planned for later milestones.
 
 ## Milestone 1
 
@@ -22,7 +22,24 @@ Open the inventory, choose one of four sample assets, aim at a floor, and place 
 | Desktop | Tab opens the inventory. Click an asset, aim at a floor, then left click to place. Left click a placed object to select it. G moves the selection to a new floor point; left click confirms. R rotates 15°; Shift+R rotates the other way. `+` and `-` scale it. Delete removes it. Ctrl/Cmd+D duplicates, Ctrl/Cmd+Z undoes, and Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z redoes. Escape or right click cancels a placement or move. |
 | Quest 3 | Y opens the spatial inventory. Point the right controller at a row and press its trigger. Point at the floor and press the trigger to place. Point at an object and press the trigger to select it. Hold the right grip on an object to move it; release over a floor to place it. Select an object and use the inventory for rotation, scale, duplication, deletion, undo, and redo. |
 
-This milestone keeps edits in memory. Restarting the app clears them; persistent scenes arrive in Milestone 3. The Quest editing controls are implemented but await a headset check.
+The Quest editing controls are implemented but await a headset check.
+
+## Milestone 3: persistent scenes
+
+The Python scene server is authoritative. It stores a JSON scene snapshot and a separate undo history under the ignored `data/projects/` directory. Edits are validated against a scene revision, written atomically, and sent to connected clients as small WebSocket deltas. The Godot client applies an edit immediately, queues it while offline, and reconciles it with the server after reconnecting. Keep the app open until its status says **Saved r…**; queued edits are held in memory and are lost if the app exits before reconnecting.
+
+Start the server from the repository root:
+
+```sh
+uv sync --project server --extra dev
+uv run --project server uvicorn app.main:app --host 0.0.0.0 --port 8765
+```
+
+Then start the desktop client with the command below. It connects to `ws://127.0.0.1:8765` and scene `demo` by default; an optional `client/server.json` overrides the address. You can also pass `-- --server-url=ws://127.0.0.1:8765` after the Godot command. Place an object, wait for **Saved**, exit, and launch the client again to see it restored. The server keeps running independently of the client. The demo's base environment remains a bundled GLB; the JSON scene contains the editable placed objects.
+
+For Quest, the server and headset must be on the same trusted Wi-Fi network. Find the computer's LAN IP, copy `client/server.example.json` to ignored `client/server.json`, and replace its example IP. Rebuild the APK so that configuration is included. The Android preset enables `INTERNET`. Do not expose this unauthenticated service outside a trusted LAN.
+
+Available endpoints include `GET /api/scenes/demo`, `POST /api/scenes`, `POST /api/scenes/demo/operations`, `GET /api/scenes/demo/history`, `POST /api/scenes/demo/undo`, `POST /api/scenes/demo/redo`, `GET /api/assets`, `GET /api/assets/chair`, and `WS /ws/scenes/demo`. `http://127.0.0.1:8765/docs` shows request schemas. Supported operations are add, delete, transform, visibility, material color, asset replacement, and duplication. All writes require the current revision. Runtime scene data under `data/` is gitignored, so personal edits are not pushed with source code.
 
 ## Run on a desktop
 
@@ -37,8 +54,9 @@ The launcher uses an existing Godot executable when available. On macOS, if none
 
 ```sh
 ./scripts/godot.sh --headless --xr-mode off --path client --quit-after 2
-./scripts/godot.sh --headless --xr-mode off --path client --script res://tests/smoke.gd -- --no-preview
-./scripts/godot.sh --headless --xr-mode off --path client --script res://tests/editing.gd -- --no-preview
+./scripts/godot.sh --headless --xr-mode off --path client --script res://tests/smoke.gd -- --no-preview --offline
+./scripts/godot.sh --headless --xr-mode off --path client --script res://tests/editing.gd -- --no-preview --offline
+uv run --project server pytest -q server/tests
 ```
 
 ## Preview a Blender scene
@@ -75,6 +93,9 @@ Launch **Worldsmith** from the Quest's app library. Godot's one-click deploy is 
 
 ```text
 client/                        Godot VR editor, scene, and committed GLBs
+server/                        FastAPI scene server and tests
+projects/demo/                 Initial demo scene and catalog assets
+data/projects/                 Local runtime scenes and history (gitignored)
 scripts/generate_sample.py     Blender source for the sample hall
 scripts/generate_edit_assets.py Blender source for the four inventory props
 docs/                          design notes and deployment instructions

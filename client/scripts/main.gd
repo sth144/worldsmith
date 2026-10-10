@@ -21,6 +21,7 @@ const DEADZONE := 0.18
 @onready var scene_editor: WorldsmithSceneEditor = $PlacedObjects
 @onready var edit_panel: WorldsmithEditPanel = $EditPanel
 @onready var placement_preview: Node3D = $PlacementPreview
+@onready var scene_sync: WorldsmithSceneSync = $SceneSync
 
 var xr_active := false
 var smooth_locomotion := true
@@ -46,6 +47,7 @@ func _ready() -> void:
 	_load_preview_from_args()
 	scene_editor.changed.connect(_on_scene_changed)
 	edit_panel.action_requested.connect(_on_edit_action)
+	scene_sync.status_changed.connect(_update_status)
 	xr_interface = XRServer.find_interface("OpenXR")
 	if OS.has_feature("android") and xr_interface:
 		if xr_interface.is_initialized() or xr_interface.initialize():
@@ -607,11 +609,11 @@ func _refresh_selection() -> void:
 	var selection_name := ""
 	if selected != null:
 		var asset: Dictionary = scene_editor.asset_info(str(selected.get_meta("asset_key")))
-		selection_name = str(asset.get("label", "Object"))
+		selection_name = str(scene_editor.wire_object(selected_id).get("name", asset.get("label", "Object")))
 		selection_outline = _make_outline(asset["size"])
 		selected.add_child(selection_outline)
 	edit_panel.set_selection_name(selection_name)
-	edit_panel.refresh_actions(selected != null, not scene_editor.undo_stack.is_empty(), not scene_editor.redo_stack.is_empty())
+	edit_panel.refresh_actions(selected != null, scene_sync.can_undo(), scene_sync.can_redo())
 
 
 func _make_outline(size: Vector3) -> MeshInstance3D:
@@ -710,8 +712,8 @@ func _update_status() -> void:
 		selected_name = str(scene_editor.asset_info(str(selected.get_meta("asset_key"))).get("label", "object"))
 	if xr_active:
 		var mode := "PLACE" if not placing_asset.is_empty() else ("MOVE" if not moving_id.is_empty() else "VIEW")
-		xr_status.text = "Worldsmith  •  %s  •  Selected: %s\nY inventory  •  Left stick walk %s  •  Right trigger select/place/teleport  •  Right grip grab" % [mode, selected_name, "ON" if smooth_locomotion else "OFF"]
+		xr_status.text = "Worldsmith  •  %s  •  Selected: %s  •  %s\nY inventory  •  Left stick walk %s  •  Right trigger select/place/teleport  •  Right grip grab" % [mode, selected_name, scene_sync.status_text(), "ON" if smooth_locomotion else "OFF"]
 	else:
 		var title := preview_name if not preview_name.is_empty() else "SAMPLE HALL"
 		var mode := "Placing " + placing_asset if not placing_asset.is_empty() else ("Moving " + selected_name if not moving_id.is_empty() else "Selected: " + selected_name)
-		status.text = "WORLDSMITH  •  %s  •  %s\nTab inventory  •  Left click select/place  •  G move  •  R rotate  •  +/- scale  •  Delete remove\nCtrl/Cmd+D duplicate  •  Ctrl/Cmd+Z undo  •  Ctrl/Cmd+Y redo  •  Right mouse teleport/cancel  •  WASD move" % [title, mode]
+		status.text = "WORLDSMITH  •  %s  •  %s  •  %s\nTab inventory  •  Left click select/place  •  G move  •  R rotate  •  +/- scale  •  Delete remove\nCtrl/Cmd+D duplicate  •  Ctrl/Cmd+Z undo  •  Ctrl/Cmd+Y redo  •  Right mouse teleport/cancel  •  WASD move" % [title, mode, scene_sync.status_text()]

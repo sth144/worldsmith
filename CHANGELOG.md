@@ -4,6 +4,10 @@
 
 ### Added
 
+- Milestone 3 FastAPI scene server with validated operations, revision conflicts, atomic JSON snapshots, persistent undo/redo history, asset retrieval, and WebSocket deltas.
+- Godot WebSocket sync with optimistic local edits, reconnect, queued in-session edits, and server reconciliation.
+- Demo project template, server API tests, and desktop client persistence/reconnect integration checks.
+- Android `INTERNET` permission and optional ignored Quest server configuration.
 - Milestone 2 local object editing: a desktop inventory and spatial Quest inventory with four generated GLB props, floor placement preview, ray selection, move, rotate, scale, duplicate, delete, and undo/redo.
 - Stable UUIDs for placed objects and a dedicated selection collision layer; yellow selection outline and right-controller editing ray.
 - A headless desktop integration check covering placement, ray selection, transforms, duplication, deletion, and undo/redo.
