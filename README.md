@@ -47,13 +47,13 @@ If you export the Quest APK while a local preview is active, the preview GLB and
 
 Set up [Godot Android export](https://docs.godotengine.org/en/4.6/tutorials/export/exporting_for_android.html): OpenJDK 17, Android SDK, Godot export templates, and SDK/JDK paths in Godot Editor Settings. Enable Developer Mode on the Quest and connect it via USB so `adb devices` lists it.
 
-The checked-in `Quest 3` Android preset selects OpenXR and arm64. Godot 4.6 includes the Khronos Android OpenXR loader, so a vendor plugin is not required for this basic viewer. Configure a debug keystore if Godot asks for one. See the [Quest export guide](docs/quest-deployment.md) for the exact checklist and build commands.
+The checked-in `Quest 3` Android preset selects OpenXR, arm64, and Gradle Build. Godot 4.6 includes the Khronos Android OpenXR loader in Gradle builds, so a vendor plugin is not required for this basic viewer. Configure a debug keystore if Godot asks for one. See the [Quest export guide](docs/quest-deployment.md) for the exact checklist and build commands.
 
 After the preset is saved:
 
 ```sh
 mkdir -p build
-(cd client && ../scripts/godot.sh --headless --export-debug "Quest 3" ../build/worldsmith.apk)
+(cd client && ../scripts/godot.sh --headless --install-android-build-template --export-debug "Quest 3" ../build/worldsmith.apk)
 adb install -r build/worldsmith.apk
 ```
 

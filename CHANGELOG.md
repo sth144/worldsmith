@@ -21,3 +21,4 @@
 ### Fixed
 
 - Enable Android ETC2/ASTC texture import so Godot 4.6.3 can export the Quest APK.
+- Use Godot's Gradle Android build so the Quest APK includes the OpenXR loader.
