@@ -1,0 +1,8 @@
+{
+  "glb": "res://tests/fixtures/assets/environment.glb",
+  "spawn": [0, 0, 4],
+  "collision": {
+    "walkable": ["grid", "floor", "paving", "stair"],
+    "solid": ["wall", "column", "pillar"]
+  }
+}

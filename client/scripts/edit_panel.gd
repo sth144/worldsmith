@@ -3,12 +3,8 @@ class_name WorldsmithEditPanel
 
 signal action_requested(action: String)
 
-const ASSET_ROWS := [
-	{"action": "place:chair", "label": "Chair"},
-	{"action": "place:table", "label": "Table"},
-	{"action": "place:planter", "label": "Planter"},
-	{"action": "place:lantern", "label": "Lantern"},
-	{"action": "ask_ai", "label": "Ask AI…"},
+const COMMAND_ROWS := [
+	{"action": "scene_command", "label": "AI command…"},
 	{"action": "ai_details", "label": "View AI output"},
 	{"action": "approve_geometry", "label": "Approve mesh edit"},
 ]
@@ -36,9 +32,14 @@ var xr_selection: Label3D
 var xr_labels: Dictionary = {}
 var desktop_buttons: Dictionary = {}
 var edit_enabled: Dictionary = {}
+var catalog_items: Array = []
+var asset_rows: Array[Dictionary] = []
+var asset_page := 0
+var desktop_asset_container: VBoxContainer
 
 
 func _ready() -> void:
+	_refresh_asset_rows()
 	_build_desktop_panel()
 	_build_xr_panel()
 	refresh_actions(false, false, false)
@@ -79,8 +80,8 @@ func update_hover(ray_origin: Vector3, ray_direction: Vector3) -> bool:
 		_update_hover_color()
 		return false
 	var row := int(floor((ROW_TOP - local.y + ROW_STEP * 0.5) / ROW_STEP))
-	if local.x < -0.02 and row >= 0 and row < ASSET_ROWS.size():
-		hover_action = ASSET_ROWS[row]["action"]
+	if local.x < -0.02 and row >= 0 and row < asset_rows.size():
+		hover_action = asset_rows[row]["action"]
 	elif local.x > 0.02 and row >= 0 and row < EDIT_ROWS.size():
 		hover_action = EDIT_ROWS[row]["action"]
 	_update_hover_color()
@@ -89,7 +90,47 @@ func update_hover(ray_origin: Vector3, ray_direction: Vector3) -> bool:
 
 func activate_hovered() -> void:
 	if not hover_action.is_empty():
-		action_requested.emit(hover_action)
+		_activate(hover_action)
+
+
+func set_assets(assets: Array) -> void:
+	catalog_items = assets.duplicate(true)
+	asset_page = 0
+	_refresh_asset_rows()
+
+
+func _refresh_asset_rows() -> void:
+	for row in asset_rows:
+		var action: String = row["action"]
+		if xr_labels.has(action):
+			xr_labels[action].queue_free()
+			xr_labels.erase(action)
+		desktop_buttons.erase(action)
+	asset_rows.clear()
+	var offset := asset_page * 4
+	for index in range(offset, mini(offset + 4, catalog_items.size())):
+		var item: Dictionary = catalog_items[index]
+		asset_rows.append({"action": "place:" + str(item["id"]), "label": str(item["name"])})
+	if catalog_items.size() > 4:
+		asset_rows.append({"action": "assets_next", "label": "More assets…"})
+	asset_rows.append_array(COMMAND_ROWS)
+	if desktop_asset_container != null:
+		for child in desktop_asset_container.get_children():
+			child.queue_free()
+		for row in asset_rows:
+			_add_desktop_button(desktop_asset_container, row)
+	if xr_panel != null:
+		for index in range(asset_rows.size()):
+			var row: Dictionary = asset_rows[index]
+			xr_labels[row["action"]] = _add_xr_label(str(row["label"]), Vector3(-0.59, ROW_TOP - index * ROW_STEP, 0.018), 26)
+
+
+func _activate(action: String) -> void:
+	if action == "assets_next":
+		asset_page = (asset_page + 1) % int(ceili(float(catalog_items.size()) / 4.0))
+		_refresh_asset_rows()
+	else:
+		action_requested.emit(action)
 
 
 func set_selection_name(selection_name: String) -> void:
@@ -128,8 +169,10 @@ func _build_desktop_panel() -> void:
 	var asset_heading := Label.new()
 	asset_heading.text = "Place an object"
 	rows.add_child(asset_heading)
-	for row in ASSET_ROWS:
-		_add_desktop_button(rows, row)
+	desktop_asset_container = VBoxContainer.new()
+	rows.add_child(desktop_asset_container)
+	for row in asset_rows:
+		_add_desktop_button(desktop_asset_container, row)
 	rows.add_child(HSeparator.new())
 	var edit_heading := Label.new()
 	edit_heading.text = "Edit selected object"
@@ -149,7 +192,7 @@ func _add_desktop_button(parent: VBoxContainer, row: Dictionary) -> void:
 
 
 func _on_button_pressed(action: String) -> void:
-	action_requested.emit(action)
+	_activate(action)
 
 
 func _build_xr_panel() -> void:
@@ -172,8 +215,8 @@ func _build_xr_panel() -> void:
 	xr_selection = _add_xr_label("Selected: None", Vector3(-0.59, 0.50, 0.018), 22)
 	_add_xr_label("ASSETS", Vector3(-0.59, 0.42, 0.018), 22)
 	_add_xr_label("EDIT", Vector3(0.08, 0.42, 0.018), 22)
-	for index in range(ASSET_ROWS.size()):
-		var row: Dictionary = ASSET_ROWS[index]
+	for index in range(asset_rows.size()):
+		var row: Dictionary = asset_rows[index]
 		xr_labels[row["action"]] = _add_xr_label(str(row["label"]), Vector3(-0.59, ROW_TOP - index * ROW_STEP, 0.018), 26)
 	for index in range(EDIT_ROWS.size()):
 		var row: Dictionary = EDIT_ROWS[index]
@@ -193,7 +236,7 @@ func _add_xr_label(value: String, location: Vector3, size: int) -> Label3D:
 
 
 func _update_hover_color() -> void:
-	for row in ASSET_ROWS:
+	for row in asset_rows:
 		var action: String = row["action"]
 		if xr_labels.has(action):
 			xr_labels[action].modulate = Color(1.0, 0.88, 0.35) if action == hover_action else Color.WHITE

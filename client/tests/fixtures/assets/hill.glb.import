@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://1gj4epklbbef"
-path="res://.godot/imported/table.glb-c2769fadef595d49042303974abc9240.scn"
+uid="uid://bn6yi7xdqncex"
+path="res://.godot/imported/hill.glb-d2182d3ff484f37457cb9c426bd84466.scn"
 
 [deps]
 
-source_file="res://assets/inventory/table.glb"
-dest_files=["res://.godot/imported/table.glb-c2769fadef595d49042303974abc9240.scn"]
+source_file="res://tests/fixtures/assets/hill.glb"
+dest_files=["res://.godot/imported/hill.glb-d2182d3ff484f37457cb9c426bd84466.scn"]
 
 [params]
 

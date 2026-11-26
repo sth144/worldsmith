@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://dthv1vpexrx6j"
-path="res://.godot/imported/sample_hall.glb-63efd95dd471d75c448e082e05a23070.scn"
+uid="uid://dvg1yija5i0s3"
+path="res://.godot/imported/planter.glb-0d3b55cfd6663893c801f99992dd9b8e.scn"
 
 [deps]
 
-source_file="res://assets/sample_hall.glb"
-dest_files=["res://.godot/imported/sample_hall.glb-63efd95dd471d75c448e082e05a23070.scn"]
+source_file="res://tests/fixtures/assets/planter.glb"
+dest_files=["res://.godot/imported/planter.glb-0d3b55cfd6663893c801f99992dd9b8e.scn"]
 
 [params]
 

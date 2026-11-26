@@ -8,6 +8,10 @@ const MOUSE_SENSITIVITY := 0.002
 const KEYBOARD_YAW_SPEED := 1.8
 const KEYBOARD_PITCH_SPEED := 1.3
 const DEADZONE := 0.18
+const A_TAP_MAX_MS := 250
+const XR_LOOK_YAW_SPEED := 1.35
+const XR_LOOK_PITCH_SPEED := 0.9
+const XR_LOOK_PITCH_LIMIT := 0.7
 
 @onready var player: CharacterBody3D = $Player
 @onready var xr_origin: XROrigin3D = $Player/XROrigin
@@ -30,8 +34,13 @@ var aiming := false
 var teleport_point := Vector3.ZERO
 var mouse_yaw := 0.0
 var mouse_pitch := 0.0
+var xr_look_pitch := 0.0
+var left_hand_was_active := false
 var xr_interface: XRInterface
 var x_was_pressed := false
+var a_was_pressed := false
+var a_pressed_at_msec := 0
+var a_used_for_sprint := false
 var preview_name := ""
 var selected_id := ""
 var placing_asset := ""
@@ -46,14 +55,43 @@ var prompt_view: Dictionary = {}
 var inventory_view: Dictionary = {}
 var inventory_focus_id := ""
 var prompt_target_id := ""
+var voice_capture: WorldsmithVoiceCapture
+var base_environment: Environment
+var base_sun_energy := 1.0
+var base_fill_energy := 0.75
+var plan_on_open := false
+var workspace_on_open := false
+var view_only := false
+var planner_opened := false
+var empty_workspace: CanvasLayer
 
 
 func _ready() -> void:
-	_load_preview_from_args()
+	plan_on_open = OS.get_cmdline_user_args().has("--plan-on-open") or bool(get_tree().root.get_meta("worldsmith_plan_on_open", false))
+	workspace_on_open = plan_on_open or OS.get_cmdline_user_args().has("--workspace-on-open") or bool(get_tree().root.get_meta("worldsmith_workspace_on_open", false))
+	view_only = bool(get_tree().root.get_meta("worldsmith_view_only", false))
+	base_environment = ($DaylightEnvironment as WorldEnvironment).environment.duplicate()
+	base_sun_energy = ($Sun as DirectionalLight3D).light_energy
+	base_fill_energy = ($InteriorFill as DirectionalLight3D).light_energy
+	if scene_sync.disabled or scene_sync.scene_id.is_empty():
+		_load_preview_from_args()
 	scene_editor.changed.connect(_on_scene_changed)
 	edit_panel.action_requested.connect(_on_edit_action)
 	prompt_panel.submitted.connect(_on_prompt_submitted)
+	voice_capture = WorldsmithVoiceCapture.new()
+	add_child(voice_capture)
+	prompt_panel.provider = str(get_tree().root.get_meta("worldsmith_provider", "codex"))
+	prompt_panel.voice_toggled.connect(func() -> void: voice_capture.toggle(scene_sync.server_url))
+	prompt_panel.closed.connect(voice_capture.cancel)
+	prompt_panel.closed.connect(_on_prompt_panel_closed)
+	voice_capture.transcript_ready.connect(prompt_panel.set_transcript)
+	voice_capture.status_changed.connect(prompt_panel.set_voice_status)
 	scene_sync.status_changed.connect(_update_status)
+	scene_sync.brief_result_ready.connect(func() -> void:
+		if is_instance_valid(empty_workspace):
+			empty_workspace.get_node("Content").visible = false
+		prompt_panel.show_result(xr_active, xr_camera if xr_active else desktop_camera, scene_sync.last_agent_details)
+	)
 	xr_interface = XRServer.find_interface("OpenXR")
 	if OS.has_feature("android") and xr_interface:
 		if xr_interface.is_initialized() or xr_interface.initialize():
@@ -66,6 +104,8 @@ func _ready() -> void:
 			push_error("OpenXR failed to initialize on this device")
 	$DesktopOverlay.visible = not xr_active
 	xr_status.visible = xr_active
+	if workspace_on_open and not xr_active:
+		_build_empty_workspace()
 	if not xr_active:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	else:
@@ -74,51 +114,187 @@ func _ready() -> void:
 	_update_status()
 
 
+func _build_empty_workspace() -> void:
+	empty_workspace = CanvasLayer.new()
+	empty_workspace.layer = 1
+	add_child(empty_workspace)
+	var backdrop := ColorRect.new()
+	backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	backdrop.color = Color(0.055, 0.075, 0.105)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	empty_workspace.add_child(backdrop)
+	var content := VBoxContainer.new()
+	content.name = "Content"
+	content.set_anchors_preset(Control.PRESET_CENTER)
+	content.position = Vector2(-260, -190)
+	content.custom_minimum_size = Vector2(520, 0)
+	content.add_theme_constant_override("separation", 18)
+	empty_workspace.add_child(content)
+	var heading := Label.new()
+	heading.text = "New scene workspace"
+	heading.add_theme_font_size_override("font_size", 36)
+	content.add_child(heading)
+	var description := Label.new()
+	description.text = "Describe a scene to create its production brief. The brief defines the walkable layout, ground, lighting, and assets."
+	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	content.add_child(description)
+	var progress := Label.new()
+	progress.name = "Progress"
+	progress.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	content.add_child(progress)
+	var open_button := Button.new()
+	open_button.name = "PlanButton"
+	open_button.text = "Plan this scene"
+	open_button.pressed.connect(_open_scene_planner)
+	content.add_child(open_button)
+	var home_button := Button.new()
+	home_button.text = "Back to library"
+	home_button.pressed.connect(func() -> void: get_tree().change_scene_to_file("res://scenes/home.tscn"))
+	content.add_child(home_button)
+	var result_button := Button.new()
+	result_button.name = "ResultButton"
+	result_button.text = "View saved production brief"
+	result_button.pressed.connect(_show_saved_scene_brief)
+	content.add_child(result_button)
+	_refresh_empty_workspace_state()
+
+
+func _open_scene_planner() -> void:
+	if not scene_sync.online:
+		return
+	if is_instance_valid(empty_workspace):
+		empty_workspace.get_node("Content").visible = false
+	prompt_panel.open_scene_planner(xr_active, xr_camera if xr_active else desktop_camera)
+
+
+func _show_saved_scene_brief() -> void:
+	if not scene_sync.brief_ready:
+		return
+	if is_instance_valid(empty_workspace):
+		empty_workspace.get_node("Content").visible = false
+	prompt_panel.show_result(xr_active, xr_camera if xr_active else desktop_camera, scene_sync.last_agent_details)
+
+
+func _refresh_empty_workspace_state() -> void:
+	if not is_instance_valid(empty_workspace):
+		return
+	var content := empty_workspace.get_node("Content")
+	var progress := content.get_node("Progress") as Label
+	var plan_button := content.get_node("PlanButton") as Button
+	var result_button := content.get_node("ResultButton") as Button
+	plan_button.disabled = scene_sync.agent_busy or not scene_sync.online
+	result_button.visible = scene_sync.brief_ready
+	if scene_sync.brief_in_flight:
+		progress.text = "Creating production brief… This can take a minute."
+	elif not scene_sync.last_error.is_empty():
+		progress.text = "Could not save plan: " + scene_sync.last_error
+	elif scene_sync.brief_ready:
+		progress.text = "Production brief saved. Assets and walkable geometry still need to be built."
+	elif not scene_sync.online:
+		progress.text = "Connecting to the local scene server…"
+	else:
+		progress.text = "Planning is the first step. It does not yet build a 3D scene."
+
+
+func _on_prompt_panel_closed() -> void:
+	if is_instance_valid(empty_workspace) and empty_workspace.visible:
+		empty_workspace.get_node("Content").visible = true
+		_refresh_empty_workspace_state()
+
+
 func _load_preview_from_args() -> void:
 	if OS.get_cmdline_user_args().has("--no-preview"):
 		return
 	var glb_path := ""
 	var spawn := player.position
+	var config: Dictionary = {}
 	var config_path := "res://assets/local/preview.json"
+	for argument in OS.get_cmdline_user_args():
+		if argument.begins_with("--preview-config="):
+			config_path = argument.trim_prefix("--preview-config=")
 	if FileAccess.file_exists(config_path):
 		var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(config_path))
 		if parsed is Dictionary:
-			var config: Dictionary = parsed
+			config = parsed
 			glb_path = str(config.get("glb", ""))
 			var configured_spawn: Array = config.get("spawn", [])
 			if configured_spawn.size() == 3:
 				spawn = Vector3(float(configured_spawn[0]), float(configured_spawn[1]), float(configured_spawn[2]))
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--preview-glb="):
-			glb_path = argument.trim_prefix("--preview-glb=")
+			var selected_glb := argument.trim_prefix("--preview-glb=")
+			if selected_glb != glb_path:
+				config = {}
+			glb_path = selected_glb
 		elif argument.begins_with("--spawn="):
 			var values := argument.trim_prefix("--spawn=").split(",")
 			if values.size() == 3:
 				spawn = Vector3(values[0].to_float(), values[1].to_float(), values[2].to_float())
 	if glb_path.is_empty():
 		return
-	var packed: PackedScene = load(glb_path)
-	if packed == null:
-		push_error("Could not load preview GLB: " + glb_path)
+	_load_preview(glb_path, config, spawn)
+
+
+func load_environment_file(glb_path: String, config: Dictionary) -> void:
+	var spawn := Vector3(0, 1.8, 0)
+	var configured_spawn: Array = config.get("spawn", [])
+	if configured_spawn.size() == 3:
+		spawn = _vector_from_array(configured_spawn)
+	_load_preview(glb_path, config, spawn)
+	if not preview_name.is_empty() and is_instance_valid(empty_workspace):
+		empty_workspace.visible = false
+
+
+func _load_preview(glb_path: String, config: Dictionary, spawn: Vector3) -> void:
+	var previous := get_node_or_null("PreviewWorld")
+	if previous != null:
+		remove_child(previous)
+		previous.queue_free()
+	($DaylightEnvironment as WorldEnvironment).environment = base_environment.duplicate()
+	($Sun as DirectionalLight3D).light_energy = base_sun_energy
+	($InteriorFill as DirectionalLight3D).light_energy = base_fill_energy
+	preview_name = ""
+	if glb_path.is_empty():
 		return
-	$SampleHall.queue_free()
-	for name in ["Floor", "WestWall", "EastWall", "NorthWall", "SouthWall", "TableObstacle"]:
-		get_node(name).collision_layer = 0
-	var preview := packed.instantiate()
+	var preview: Node3D
+	if glb_path.begins_with("res://"):
+		var packed := load(glb_path) as PackedScene
+		preview = packed.instantiate() if packed != null else null
+	else:
+		var document := GLTFDocument.new()
+		var state := GLTFState.new()
+		if document.append_from_file(glb_path, state) == OK:
+			preview = document.generate_scene(state)
+	if preview == null:
+		push_error("Could not load environment GLB: " + glb_path)
+		return
 	preview.name = "PreviewWorld"
 	add_child(preview)
+	for overlay_path in config.get("overlays", []):
+		var overlay_scene: PackedScene = load(str(overlay_path))
+		if overlay_scene == null:
+			push_error("Could not load preview overlay: " + str(overlay_path))
+			continue
+		var overlay := overlay_scene.instantiate()
+		overlay.name = str(overlay_path).get_file().get_basename()
+		preview.add_child(overlay)
+	_apply_preview_settings(preview, config)
 	_load_preview_instances(preview, glb_path.get_basename() + "-instances.json")
 	var collision_count := 0
+	var collision_settings: Dictionary = config.get("collision", {})
+	var walkable_names: Array = collision_settings.get("walkable", [])
+	var solid_names: Array = collision_settings.get("solid", [])
+	var hidden_names: Array = config.get("hidden_meshes", [])
 	for mesh_node in preview.find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := mesh_node as MeshInstance3D
 		if mesh_instance.mesh == null:
 			continue
 		var node_name := mesh_instance.name.to_lower()
-		if glb_path.get_file() == "merchant.glb" and (node_name.begins_with("gate doors") or node_name.begins_with("gate ironwork") or node_name.begins_with("gate straps")):
+		if _name_has_any(node_name, hidden_names):
 			mesh_instance.visible = false
 			continue
-		var walkable := _name_has_any(node_name, ["grid", "paving", "floor", "road", "deck", "stoop", "stair"])
-		var solid := walkable or _name_has_any(node_name, ["wall", "column", "pillar"])
+		var walkable := _name_has_any(node_name, walkable_names)
+		var solid := walkable or _name_has_any(node_name, solid_names)
 		if not solid:
 			continue
 		var shape := mesh_instance.mesh.create_trimesh_shape()
@@ -131,32 +307,78 @@ func _load_preview_from_args() -> void:
 		collision.shape = shape
 		body.add_child(collision)
 		collision_count += 1
-	if glb_path.get_file() == "merchant.glb":
-		_add_merchant_fill_lights(preview)
 	player.position = spawn
 	preview_name = glb_path.get_file()
 	print("Preview loaded: %s; %d collision meshes" % [preview_name, collision_count])
 
 
-func _add_merchant_fill_lights(preview: Node3D) -> void:
-	# The imported GLB has no Blender interior lighting. Local lights reveal
-	# wall, stair, and floor junctions without changing its source materials.
-	var positions := [
-		Vector3(14.0, 25.8, 3.5),
-		Vector3(2.5, 25.8, 8.5),
-		Vector3(25.5, 25.8, 8.5),
-		Vector3(13.5, 25.8, 24.5),
-		Vector3(26.0, 25.8, 34.0),
-	]
-	for index in range(positions.size()):
+func _apply_preview_settings(preview: Node3D, config: Dictionary) -> void:
+	var lighting: Dictionary = config.get("lighting", {})
+	if lighting.has("sun_energy"):
+		($Sun as DirectionalLight3D).light_energy = float(lighting["sun_energy"])
+	if lighting.has("fill_energy"):
+		($InteriorFill as DirectionalLight3D).light_energy = float(lighting["fill_energy"])
+	for entry in config.get("materials", []):
+		var shader: Shader = load(str(entry.get("shader", "")))
+		if shader == null:
+			push_error("Preview material shader is unavailable")
+			continue
+		var material := ShaderMaterial.new()
+		material.shader = shader
+		var valid := true
+		for parameter in entry.get("textures", {}):
+			var texture: Texture2D = load(str(entry["textures"][parameter]))
+			if texture == null:
+				valid = false
+				break
+			material.set_shader_parameter(parameter, texture)
+		if not valid:
+			push_error("Preview material texture is unavailable")
+			continue
+		for node in preview.find_children("*", "MeshInstance3D", true, false):
+			if _name_has_any(node.name.to_lower(), [str(entry.get("mesh", "")).to_lower()]):
+				(node as MeshInstance3D).material_override = material
+	var sky_settings: Dictionary = config.get("sky", {})
+	if not sky_settings.is_empty():
+		var environment := ($DaylightEnvironment as WorldEnvironment).environment.duplicate() as Environment
+		var sky_material := ProceduralSkyMaterial.new()
+		for field in ["sky_top_color", "sky_horizon_color", "ground_horizon_color", "ground_bottom_color"]:
+			if sky_settings.has(field):
+				sky_material.set(field, _color_from_array(sky_settings[field]))
+		var sky := Sky.new()
+		sky.sky_material = sky_material
+		environment.sky = sky
+		environment.background_mode = Environment.BG_SKY
+		environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+		($DaylightEnvironment as WorldEnvironment).environment = environment
+	var fog_settings: Dictionary = config.get("fog", {})
+	if not fog_settings.is_empty():
+		var fog_environment := ($DaylightEnvironment as WorldEnvironment).environment.duplicate() as Environment
+		fog_environment.fog_enabled = bool(fog_settings.get("enabled", true))
+		fog_environment.fog_light_color = _color_from_array(fog_settings.get("color", [0.7, 0.72, 0.73]))
+		fog_environment.fog_density = float(fog_settings.get("density", 0.005))
+		fog_environment.fog_sky_affect = float(fog_settings.get("sky_affect", 0.1))
+		($DaylightEnvironment as WorldEnvironment).environment = fog_environment
+	if lighting.has("ambient_energy"):
+		var lit_environment := ($DaylightEnvironment as WorldEnvironment).environment.duplicate() as Environment
+		lit_environment.ambient_light_energy = float(lighting["ambient_energy"])
+		($DaylightEnvironment as WorldEnvironment).environment = lit_environment
+	for entry in config.get("lights", []):
 		var light := OmniLight3D.new()
-		light.name = "PreviewFill%d" % index
-		light.position = positions[index]
-		light.light_color = Color(1.0, 0.88, 0.72)
-		light.light_energy = 2.0
-		light.omni_range = 11.0
-		light.shadow_enabled = false
+		light.position = _vector_from_array(entry.get("position", [0, 0, 0]))
+		light.light_color = _color_from_array(entry.get("color", [1, 1, 1]))
+		light.light_energy = float(entry.get("energy", 1.0))
+		light.omni_range = float(entry.get("range", 10.0))
+		light.shadow_enabled = bool(entry.get("shadows", false))
 		preview.add_child(light)
+
+
+func _vector_from_array(values: Array) -> Vector3:
+	return Vector3(float(values[0]), float(values[1]), float(values[2]))
+
+
+func _color_from_array(values: Array) -> Color:
+	return Color(float(values[0]), float(values[1]), float(values[2]))
 
 
 func _load_preview_instances(preview: Node3D, manifest_path: String) -> void:
@@ -167,40 +389,61 @@ func _load_preview_instances(preview: Node3D, manifest_path: String) -> void:
 		push_error("Invalid preview instance manifest: " + manifest_path)
 		return
 	for group in parsed.get("groups", []):
-		var prototype_scene: PackedScene = load(str(group.get("glb", "")))
-		var transform_file := FileAccess.open(str(group.get("transforms", "")), FileAccess.READ)
-		var count := int(group.get("count", 0))
-		if prototype_scene == null or transform_file == null or count <= 0 or transform_file.get_length() != count * 48:
-			push_error("Invalid preview instance group")
-			continue
-		var prototype_root := prototype_scene.instantiate()
-		var prototype_meshes := prototype_root.find_children("*", "MeshInstance3D", true, false)
-		if prototype_meshes.is_empty():
+		_add_preview_instance_group(preview, group)
+
+
+func add_preview_instance_group(group: Dictionary) -> bool:
+	var preview := get_node_or_null("PreviewWorld") as Node3D
+	if preview == null:
+		return false
+	return _add_preview_instance_group(preview, group)
+
+
+func _add_preview_instance_group(preview: Node3D, group: Dictionary) -> bool:
+	var glb_path := str(group.get("glb", ""))
+	var prototype_root: Node3D
+	if glb_path.begins_with("res://"):
+		var prototype_scene := load(glb_path) as PackedScene
+		prototype_root = prototype_scene.instantiate() if prototype_scene != null else null
+	else:
+		var document := GLTFDocument.new()
+		var state := GLTFState.new()
+		if document.append_from_file(glb_path, state) == OK:
+			prototype_root = document.generate_scene(state)
+	var transform_file := FileAccess.open(str(group.get("transforms", "")), FileAccess.READ)
+	var count := int(group.get("count", 0))
+	if prototype_root == null or transform_file == null or count <= 0 or transform_file.get_length() != count * 48:
+		push_error("Invalid preview instance group")
+		if prototype_root != null:
 			prototype_root.free()
-			continue
-		var prototype: MeshInstance3D = prototype_meshes[0]
-		var multimesh := MultiMesh.new()
-		multimesh.transform_format = MultiMesh.TRANSFORM_3D
-		multimesh.mesh = prototype.mesh
-		multimesh.instance_count = count
-		for index in range(count):
-			var x_axis := Vector3(transform_file.get_float(), transform_file.get_float(), transform_file.get_float())
-			var y_axis := Vector3(transform_file.get_float(), transform_file.get_float(), transform_file.get_float())
-			var z_axis := Vector3(transform_file.get_float(), transform_file.get_float(), transform_file.get_float())
-			var position := Vector3(transform_file.get_float(), transform_file.get_float(), transform_file.get_float())
-			multimesh.set_instance_transform(index, Transform3D(Basis(x_axis, y_axis, z_axis), position))
-		var instance_node := MultiMeshInstance3D.new()
-		instance_node.name = "PreviewInstances"
-		instance_node.multimesh = multimesh
-		instance_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		preview.add_child(instance_node)
+		return false
+	var prototype_meshes := prototype_root.find_children("*", "MeshInstance3D", true, false)
+	if prototype_meshes.is_empty():
 		prototype_root.free()
-		print("Preview instances: %d" % count)
+		return false
+	var prototype: MeshInstance3D = prototype_meshes[0]
+	var multimesh := MultiMesh.new()
+	multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	multimesh.mesh = prototype.mesh
+	multimesh.instance_count = count
+	for index in range(count):
+		var x_axis := Vector3(transform_file.get_float(), transform_file.get_float(), transform_file.get_float())
+		var y_axis := Vector3(transform_file.get_float(), transform_file.get_float(), transform_file.get_float())
+		var z_axis := Vector3(transform_file.get_float(), transform_file.get_float(), transform_file.get_float())
+		var position := Vector3(transform_file.get_float(), transform_file.get_float(), transform_file.get_float())
+		multimesh.set_instance_transform(index, Transform3D(Basis(x_axis, y_axis, z_axis), position))
+	var instance_node := MultiMeshInstance3D.new()
+	instance_node.name = "PreviewInstances"
+	instance_node.multimesh = multimesh
+	instance_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	preview.add_child(instance_node)
+	prototype_root.free()
+	print("Preview instances: %d" % count)
+	return true
 
-
-func _name_has_any(value: String, words: Array[String]) -> bool:
+func _name_has_any(value: String, words: Array) -> bool:
 	for word in words:
-		if value.contains(word):
+		if not str(word).is_empty() and value.contains(str(word).to_lower()):
 			return true
 	return false
 
@@ -219,6 +462,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		desktop_camera.rotation.x = mouse_pitch
 		player.rotation.y = mouse_yaw
 	elif event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_H:
+			get_tree().change_scene_to_file("res://scenes/home.tscn")
+			get_viewport().set_input_as_handled()
+			return
+		if view_only:
+			return
 		if event.keycode == KEY_TAB:
 			_toggle_inventory()
 			get_viewport().set_input_as_handled()
@@ -278,12 +527,18 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _physics_process(delta: float) -> void:
 	if xr_active:
+		var left_active := left_controller.get_is_active()
+		if left_active != left_hand_was_active:
+			left_hand_was_active = left_active
+			_update_status()
 		_update_xr_panel_ray()
 		_process_xr_input()
+		_process_xr_look(delta)
 	else:
 		aiming = Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) and not _is_editing() and not edit_panel.is_open
 		_process_desktop_look(delta)
-	_process_movement(delta)
+	if not preview_name.is_empty():
+		_process_movement(delta)
 	_update_edit_preview()
 	_update_teleport_target()
 
@@ -302,7 +557,7 @@ func _process_desktop_look(delta: float) -> void:
 
 
 func _process_xr_input() -> void:
-	var y_pressed := left_controller.is_button_pressed("by_button")
+	var y_pressed := left_controller.is_button_pressed("by_button") or right_controller.is_button_pressed("by_button")
 	if y_pressed and not y_was_pressed and not prompt_panel.is_open:
 		_toggle_inventory()
 	y_was_pressed = y_pressed
@@ -311,6 +566,19 @@ func _process_xr_input() -> void:
 		smooth_locomotion = not smooth_locomotion
 		_update_status()
 	x_was_pressed = x_pressed
+	var a_pressed := right_controller.is_button_pressed("ax_button")
+	if a_pressed and not a_was_pressed:
+		a_pressed_at_msec = Time.get_ticks_msec()
+		a_used_for_sprint = false
+	if a_pressed and smooth_locomotion and not edit_panel.is_open and not prompt_panel.is_open:
+		var walk_stick := left_controller.get_vector2("primary") if left_controller.get_is_active() else right_controller.get_vector2("primary")
+		if walk_stick.length() >= DEADZONE:
+			a_used_for_sprint = true
+	if not a_pressed and a_was_pressed:
+		if not a_used_for_sprint and Time.get_ticks_msec() - a_pressed_at_msec <= A_TAP_MAX_MS:
+			smooth_locomotion = not smooth_locomotion
+			_update_status()
+	a_was_pressed = a_pressed
 	var grip_pressed := right_controller.is_button_pressed("grip_click")
 	if grip_pressed and not grip_was_pressed and not edit_panel.is_open and not prompt_panel.is_open and not _is_editing():
 		var grabbed_id := _object_under_ray()
@@ -341,10 +609,34 @@ func _process_xr_input() -> void:
 	trigger_was_pressed = trigger_pressed
 
 
+func _process_xr_look(delta: float) -> void:
+	if not left_controller.get_is_active() or not right_controller.get_is_active():
+		return
+	if edit_panel.is_open or prompt_panel.is_open:
+		return
+	var stick := right_controller.get_vector2("primary")
+	if absf(stick.x) > DEADZONE:
+		_rotate_xr_origin_around_head(Vector3.UP, -stick.x * XR_LOOK_YAW_SPEED * delta)
+	if absf(stick.y) > DEADZONE:
+		var next_pitch := clampf(xr_look_pitch + stick.y * XR_LOOK_PITCH_SPEED * delta,
+			-XR_LOOK_PITCH_LIMIT, XR_LOOK_PITCH_LIMIT)
+		_rotate_xr_origin_around_head(xr_camera.global_basis.x, next_pitch - xr_look_pitch)
+		xr_look_pitch = next_pitch
+
+
+func _rotate_xr_origin_around_head(axis: Vector3, angle: float) -> void:
+	if is_zero_approx(angle):
+		return
+	var pivot := xr_camera.global_position
+	var turn := Basis(axis.normalized(), angle)
+	xr_origin.global_transform = Transform3D(turn, pivot - turn * pivot) * xr_origin.global_transform
+
+
 func _process_movement(delta: float) -> void:
 	var input_vector := Vector2.ZERO
 	if xr_active and smooth_locomotion and not edit_panel.is_open and not prompt_panel.is_open:
-		input_vector = left_controller.get_vector2("primary")
+		# The right stick walks only when the left controller is unavailable.
+		input_vector = left_controller.get_vector2("primary") if left_controller.get_is_active() else right_controller.get_vector2("primary")
 		# OpenXR thumbstick Y is positive forward; Godot's camera looks down -Z.
 		input_vector.y = -input_vector.y
 	elif not xr_active and not edit_panel.is_open and not prompt_panel.is_open:
@@ -360,7 +652,10 @@ func _process_movement(delta: float) -> void:
 	var move_direction := facing * Vector3(input_vector.x, 0, input_vector.y)
 	move_direction.y = 0
 	move_direction = move_direction.normalized() * input_vector.length()
-	var speed := WALK_SPEED * (SPRINT_MULTIPLIER if not xr_active and Input.is_key_pressed(KEY_SHIFT) else 1.0)
+	var sprinting := Input.is_key_pressed(KEY_SHIFT)
+	if xr_active:
+		sprinting = (left_controller.get_is_active() and left_controller.is_button_pressed("primary_click")) or (right_controller.get_is_active() and (right_controller.is_button_pressed("primary_click") or right_controller.is_button_pressed("ax_button")))
+	var speed := WALK_SPEED * (SPRINT_MULTIPLIER if sprinting else 1.0)
 	player.velocity.x = move_direction.x * speed
 	player.velocity.z = move_direction.z * speed
 	player.velocity.y -= 9.8 * delta
@@ -462,6 +757,8 @@ func _set_inventory(value: bool) -> void:
 
 
 func _on_edit_action(action: String) -> void:
+	if view_only:
+		return
 	if action == "approve_geometry":
 		scene_sync.approve_geometry()
 		_set_inventory(false)
@@ -470,7 +767,7 @@ func _on_edit_action(action: String) -> void:
 		_set_inventory(false)
 		prompt_panel.show_result(xr_active, xr_camera if xr_active else desktop_camera, scene_sync.last_agent_details)
 		return
-	if action == "ask_ai":
+	if action == "scene_command":
 		prompt_target_id = selected_id if not selected_id.is_empty() else inventory_focus_id
 		prompt_view = inventory_view
 		var context := "Selected object" if not selected_id.is_empty() else ("Aimed object" if not prompt_target_id.is_empty() else "Viewed ground")
@@ -510,14 +807,18 @@ func _on_edit_action(action: String) -> void:
 	_update_status()
 
 
-func _on_prompt_submitted(prompt: String) -> void:
+func _on_prompt_submitted(prompt: String, provider: String) -> void:
+	if prompt_panel.creation_mode == "scene_brief":
+		scene_sync.request_scene_brief(prompt, provider)
+		_update_status()
+		return
 	if not prompt_target_id.is_empty() or not prompt_view.is_empty():
 		var targets: Array[String] = []
 		if not selected_id.is_empty():
 			targets.append(selected_id)
-		scene_sync.request_agent(prompt, targets, prompt_view, prompt_target_id if selected_id.is_empty() else "")
+		scene_sync.request_agent(prompt, targets, prompt_view, prompt_target_id if selected_id.is_empty() else "", provider, prompt_panel.creation_mode)
 	else:
-		scene_sync.last_error = "Aim at a placed object or look at a floor point, then open Ask AI"
+		scene_sync.last_error = "Aim at a placed object or look at a floor point, then open AI command"
 		scene_sync.status_changed.emit()
 	_update_status()
 
@@ -767,14 +1068,19 @@ func _update_xr_panel_ray() -> void:
 
 
 func _update_status() -> void:
+	_refresh_empty_workspace_state()
+	if plan_on_open and not planner_opened and scene_sync.online:
+		planner_opened = true
+		call_deferred("_open_scene_planner")
 	var selected := scene_editor.object_node(selected_id)
 	var selected_name := "none"
 	if selected != null:
 		selected_name = str(scene_editor.asset_info(str(selected.get_meta("asset_key"))).get("label", "object"))
 	if xr_active:
 		var mode := "PLACE" if not placing_asset.is_empty() else ("MOVE" if not moving_id.is_empty() else "VIEW")
-		xr_status.text = "Worldsmith  •  %s  •  Selected: %s  •  %s\nY inventory  •  Left stick walk %s  •  Right trigger select/place/teleport  •  Right grip grab" % [mode, selected_name, scene_sync.status_text(), "ON" if smooth_locomotion else "OFF"]
+		var sticks := "L walk / R look" if left_controller.get_is_active() else "R walk"
+		xr_status.text = "Worldsmith  •  %s  •  Selected: %s  •  %s\n%s %s  •  Hold A or stick click: sprint  •  Tap A/X: walk toggle" % [mode, selected_name, scene_sync.status_text(), sticks, "ON" if smooth_locomotion else "OFF"]
 	else:
-		var title := preview_name if not preview_name.is_empty() else "SAMPLE HALL"
+		var title := preview_name if not preview_name.is_empty() else "EMPTY SCENE"
 		var mode := "Placing " + placing_asset if not placing_asset.is_empty() else ("Moving " + selected_name if not moving_id.is_empty() else "Selected: " + selected_name)
-		status.text = "WORLDSMITH  •  %s  •  %s  •  %s\nTab inventory  •  Left click select/place  •  G move  •  R rotate  •  +/- scale  •  Delete remove\nCtrl/Cmd+D duplicate  •  Ctrl/Cmd+Z undo  •  Ctrl/Cmd+Y redo  •  Right mouse teleport/cancel  •  WASD move" % [title, mode, scene_sync.status_text()]
+		status.text = "WORLDSMITH  •  %s  •  %s  •  %s\nH home  •  %s" % [title, mode, scene_sync.status_text(), "WASD move  •  Right mouse teleport" if view_only else "Tab inventory  •  Left click select/place  •  G move  •  R rotate  •  +/- scale  •  Delete remove"]

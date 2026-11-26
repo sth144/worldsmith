@@ -10,6 +10,7 @@ func _check() -> void:
 	root.add_child(world)
 	var sync: WorldsmithSceneSync = world.get_node("SceneSync")
 	var editor: WorldsmithSceneEditor = world.get_node("PlacedObjects")
+	WorldsmithTestAssets.register(editor)
 	if not await _wait_for(func() -> bool: return sync.online, 300):
 		_fail("Scene server did not connect")
 		return
@@ -38,7 +39,7 @@ func _check() -> void:
 	var assets := {}
 	for object_id in editor.objects:
 		assets[editor.wire_object(object_id)["asset"]] = true
-	if not assets.has("assets/hill.glb") or not assets.has("assets/tree.glb"):
+	if not assets.has("assets/hill.glb") or not assets.has("assets/tree-v-foliage1.glb"):
 		_fail("View placements use wrong assets")
 		return
 	editor.undo()

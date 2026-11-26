@@ -6,15 +6,6 @@ signal operation_committed(operation: Dictionary)
 
 # All transforms are local to this node, in meters and Godot/glTF Y-up space.
 # The origin of every catalog asset is on the floor.
-const CATALOG := {
-	"chair": {"label": "Chair", "path": "res://assets/inventory/chair.glb", "size": Vector3(0.62, 1.35, 0.62)},
-	"table": {"label": "Table", "path": "res://assets/inventory/table.glb", "size": Vector3(1.28, 0.78, 0.78)},
-	"planter": {"label": "Planter", "path": "res://assets/inventory/planter.glb", "size": Vector3(0.54, 1.1, 0.54)},
-	"lantern": {"label": "Lantern", "path": "res://assets/inventory/lantern.glb", "size": Vector3(0.4, 0.7, 0.4)},
-	"hill": {"label": "Hill", "path": "res://assets/inventory/hill.glb", "size": Vector3(4.7, 1.12, 4.7)},
-	"tree": {"label": "Tree", "path": "res://assets/inventory/tree.glb", "size": Vector3(2.2, 3.25, 2.2)},
-}
-
 var objects: Dictionary = {}
 var undo_stack: Array[Dictionary] = []
 var redo_stack: Array[Dictionary] = []
@@ -23,13 +14,17 @@ var dynamic_assets: Dictionary = {}
 
 
 func asset_info(asset_key: String) -> Dictionary:
-	return dynamic_assets.get(asset_key, CATALOG.get(asset_key, {}))
+	var info: Dictionary = dynamic_assets.get(asset_key, {})
+	if OS.has_feature("mobile") and info.has("mobile_path"):
+		var mobile_info := info.duplicate()
+		mobile_info["path"] = mobile_info["mobile_path"]
+		return mobile_info
+	return info
 
 
-func register_dynamic_asset(asset_key: String, file_path: String) -> void:
-	var source_key := asset_key.split("-v-")[0]
-	var source: Dictionary = CATALOG.get(source_key, {})
-	dynamic_assets[asset_key] = {"label": asset_key, "path": file_path, "size": source.get("size", Vector3.ONE)}
+func register_dynamic_asset(asset_key: String, file_path: String, label: String = "", walkable: bool = false) -> void:
+	dynamic_assets[asset_key] = {"label": label if not label.is_empty() else asset_key,
+		"path": file_path, "size": Vector3.ONE, "walkable": walkable}
 
 
 func instantiate_asset(asset_key: String) -> Node3D:
@@ -67,7 +62,7 @@ func object_state(object_id: String) -> Dictionary:
 
 
 func add_object(asset_key: String, object_transform: Transform3D, object_id: String = "") -> String:
-	if not CATALOG.has(asset_key):
+	if asset_info(asset_key).is_empty():
 		return ""
 	if object_id.is_empty():
 		object_id = _new_uuid()
@@ -307,15 +302,28 @@ func _apply_state(object_id: String, state: Dictionary) -> void:
 	var collision := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
 	var size: Vector3 = asset["size"]
+	var collision_center := Vector3(0, size.y * 0.5, 0)
+	var bounds := AABB()
+	var has_bounds := false
+	for mesh_node in visual.find_children("*", "MeshInstance3D", true, false):
+		var mesh := mesh_node as MeshInstance3D
+		if mesh.mesh == null:
+			continue
+		var mesh_bounds: AABB = (body.global_transform.affine_inverse() * mesh.global_transform) * mesh.mesh.get_aabb()
+		bounds = bounds.merge(mesh_bounds) if has_bounds else mesh_bounds
+		has_bounds = true
+	if has_bounds:
+		size = bounds.size.max(Vector3(0.1, 0.1, 0.1))
+		collision_center = bounds.get_center()
 	shape.size = size
 	collision.shape = shape
-	collision.position.y = size.y * 0.5
+	collision.position = collision_center
 	body.add_child(collision)
-	if str(state["asset"]).begins_with("hill"):
+	if bool(asset.get("walkable", false)):
 		# A separate mesh collider makes the new mound walkable while keeping
 		# the broad selection box on the object-selection layer.
 		var terrain := StaticBody3D.new()
-		terrain.name = "WalkableHill"
+		terrain.name = "WalkableAsset"
 		terrain.collision_layer = 1
 		terrain.collision_mask = 0
 		body.add_child(terrain)

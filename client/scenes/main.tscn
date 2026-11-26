@@ -1,23 +1,10 @@
-[gd_scene load_steps=15 format=3]
+[gd_scene load_steps=10 format=3]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
-[ext_resource type="PackedScene" path="res://assets/sample_hall.glb" id="2_hall"]
 [ext_resource type="Script" path="res://scripts/scene_editor.gd" id="3_editor"]
 [ext_resource type="Script" path="res://scripts/edit_panel.gd" id="4_panel"]
 [ext_resource type="Script" path="res://scripts/scene_sync.gd" id="5_sync"]
 [ext_resource type="Script" path="res://scripts/prompt_panel.gd" id="6_prompt"]
-
-[sub_resource type="BoxShape3D" id="BoxShape_floor"]
-size = Vector3(16, 0.2, 16)
-
-[sub_resource type="BoxShape3D" id="BoxShape_wall_x"]
-size = Vector3(0.3, 3, 16)
-
-[sub_resource type="BoxShape3D" id="BoxShape_wall_z"]
-size = Vector3(16, 3, 0.3)
-
-[sub_resource type="BoxShape3D" id="BoxShape_table"]
-size = Vector3(2.4, 0.9, 1.4)
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape_player"]
 radius = 0.28
@@ -46,8 +33,6 @@ ssao_intensity = 1.7
 [node name="World" type="Node3D"]
 script = ExtResource("1_main")
 
-[node name="SampleHall" parent="." instance=ExtResource("2_hall")]
-
 [node name="DaylightEnvironment" type="WorldEnvironment" parent="."]
 environment = SubResource("Environment_daylight")
 
@@ -62,50 +47,8 @@ light_color = Color(1, 0.93, 0.82, 1)
 light_energy = 0.75
 shadow_enabled = false
 
-[node name="Floor" type="StaticBody3D" parent="."]
-collision_layer = 1
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Floor"]
-position = Vector3(0, -0.1, 0)
-shape = SubResource("BoxShape_floor")
-
-[node name="WestWall" type="StaticBody3D" parent="."]
-collision_layer = 2
-position = Vector3(-8, 1.5, 0)
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="WestWall"]
-shape = SubResource("BoxShape_wall_x")
-
-[node name="EastWall" type="StaticBody3D" parent="."]
-collision_layer = 2
-position = Vector3(8, 1.5, 0)
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="EastWall"]
-shape = SubResource("BoxShape_wall_x")
-
-[node name="NorthWall" type="StaticBody3D" parent="."]
-collision_layer = 2
-position = Vector3(0, 1.5, -8)
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="NorthWall"]
-shape = SubResource("BoxShape_wall_z")
-
-[node name="SouthWall" type="StaticBody3D" parent="."]
-collision_layer = 2
-position = Vector3(0, 1.5, 8)
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="SouthWall"]
-shape = SubResource("BoxShape_wall_z")
-
-[node name="TableObstacle" type="StaticBody3D" parent="."]
-collision_layer = 2
-position = Vector3(1.5, 0.45, -1.5)
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="TableObstacle"]
-shape = SubResource("BoxShape_table")
-
 [node name="Player" type="CharacterBody3D" parent="."]
-position = Vector3(0, 0, 4)
+position = Vector3(0, 1.8, 0)
 collision_layer = 4
 collision_mask = 3
 floor_snap_length = 0.2

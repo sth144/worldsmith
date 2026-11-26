@@ -8,6 +8,7 @@ func _initialize() -> void:
 func _check() -> void:
 	var editor := WorldsmithSceneEditor.new()
 	root.add_child(editor)
+	WorldsmithTestAssets.register(editor)
 	var object_id := editor.add_object("chair", Transform3D.IDENTITY)
 	var wire := editor.wire_object(object_id)
 	wire["metadata"] = {"material_color": [0.85, 0.08, 0.06, 1]}

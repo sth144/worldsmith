@@ -12,6 +12,7 @@ func _check() -> void:
 	root.add_child(world)
 	await physics_frame
 	var editor: WorldsmithSceneEditor = world.get_node("PlacedObjects")
+	WorldsmithTestAssets.register(editor)
 	var panel: WorldsmithEditPanel = world.get_node("EditPanel")
 	var camera: Camera3D = world.get_node("Player/DesktopCamera")
 	camera.rotation.x = -0.48
