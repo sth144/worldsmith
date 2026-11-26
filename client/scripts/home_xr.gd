@@ -25,6 +25,7 @@ var scroll_wait := 0.0
 
 
 func _ready() -> void:
+	RenderingServer.set_default_clear_color(WorldsmithTheme.GROUND.darkened(0.45))
 	_build_rig()
 	_build_panel()
 	xr_active = _start_xr()

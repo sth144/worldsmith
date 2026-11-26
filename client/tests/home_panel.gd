@@ -15,19 +15,22 @@ func _check() -> void:
 	await create_timer(0.5).timeout
 	var home: Control = shell.home
 	assert(home.panel_mode, "Home did not detect that it is hosted on a panel")
+	home.scenes = [{"scene_id": "panel-first", "revision": 0, "object_count": 0, "has_environment": false,
+		"has_walkable": false, "has_brief": true, "title": ""},
+		{"scene_id": "panel-test", "revision": 0, "object_count": 0, "has_environment": false,
+		"has_walkable": false, "has_brief": false, "title": ""}]
+	home._fill_scene_rows()
+	home._select_scene_id("panel-first")
+	await process_frame
 	var disabled := {}
 	for button in home.find_children("*", "Button", true, false):
 		disabled[(button as Button).text] = (button as Button).disabled
-	assert(disabled.get("Import Scene · desktop only", false), "Desktop-only action is enabled on the panel")
-	assert(disabled.get("Build from Brief · not built yet", false), "Planned action is enabled")
-	assert(disabled.get("Run Scene", true) == false, "Run Scene should work on the panel")
+	assert(disabled.get("Import a GLB · desktop only", false), "Desktop-only action is enabled on the panel")
+	assert(disabled.get("Build from brief · not built yet", false), "Planned action is enabled")
+	assert(disabled.get("Edit scene", true) == false, "Edit scene should work on the panel")
 
-	var list: ItemList = home.scene_list
-	list.clear()
-	var index := list.add_item("panel-test")
-	list.set_item_metadata(index, "panel-test")
-	await process_frame
-	var pixel := list.get_global_rect().position + list.get_item_rect(index).get_center()
+	var row: Button = home.scene_buttons["panel-test"]
+	var pixel := row.get_global_rect().get_center()
 	var local := Vector3((pixel.x / shell.VIEW_SIZE.x - 0.5) * shell.PANEL_SIZE.x,
 		(0.5 - pixel.y / shell.VIEW_SIZE.y) * shell.PANEL_SIZE.y, 0.0)
 	var origin := Vector3(0.3, 1.2, 0.0)

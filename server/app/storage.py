@@ -58,8 +58,18 @@ class SceneStore:
                     "has_environment": (project / "environment.json").is_file(),
                     "has_walkable": has_walkable(project),
                     "has_brief": (project / "brief.json").is_file(),
+                    "title": self._brief_prompt(project),
                 })
         return entries
+
+    @staticmethod
+    def _brief_prompt(project: Path) -> str:
+        """The prompt a scene was planned from, as a readable name for listings."""
+        try:
+            prompt = json.loads((project / "brief.json").read_text()).get("prompt", "")
+        except (OSError, ValueError, AttributeError):
+            return ""
+        return prompt.strip()[:120] if isinstance(prompt, str) else ""
 
     def create(self, scene_id: str) -> dict:
         project = self.project(scene_id)

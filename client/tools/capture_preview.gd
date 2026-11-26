@@ -88,7 +88,7 @@ func _capture() -> void:
 		world = world.get("home")
 	if home and not home_view_brief.is_empty():
 		await create_timer(1.0).timeout
-		print("Home capture scenes: ", (world.get("scene_list") as ItemList).item_count)
+		print("Home capture scenes: ", (world.get("scenes") as Array).size())
 		world.call("_select_scene_id", home_view_brief)
 		print("Home capture selected: ", world.get("selected_scene"))
 		world.call("_view_brief")

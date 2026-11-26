@@ -14,12 +14,18 @@ var scenes: Array = []
 var assets: Array = []
 var selected_scene := ""
 var selected_asset := ""
-var scene_list: ItemList
-var asset_list: ItemList
-var scene_details: Label
-var asset_details: Label
-var asset_request_label: Label
+var scenes_view: HBoxContainer
+var assets_view: HBoxContainer
+var scene_rows: VBoxContainer
+var asset_rows: VBoxContainer
+var scene_detail: VBoxContainer
+var asset_detail: VBoxContainer
+var scene_buttons: Dictionary = {}
+var asset_buttons: Dictionary = {}
+var connection_label: Label
 var status_label: Label
+var waiting_requests := -1
+var import_target := ""
 var brief_panel: ColorRect
 var brief_text: TextEdit
 var panel_mode := false
@@ -87,82 +93,34 @@ func _load_settings() -> void:
 
 
 func _build_interface() -> void:
+	theme = WorldsmithTheme.build()
 	var background := ColorRect.new()
 	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	background.color = Color(0.055, 0.075, 0.105)
+	background.color = WorldsmithTheme.GROUND
 	add_child(background)
-	var outer := MarginContainer.new()
+	var outer := _margin(32)
+	outer.add_theme_constant_override("margin_top", 20)
+	outer.add_theme_constant_override("margin_bottom", 18)
 	outer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	for side in ["left", "top", "right", "bottom"]:
-		outer.add_theme_constant_override("margin_" + side, 30)
 	add_child(outer)
 	var page := VBoxContainer.new()
-	page.add_theme_constant_override("separation", 18)
+	page.add_theme_constant_override("separation", 16)
 	outer.add_child(page)
-	var header := HBoxContainer.new()
-	page.add_child(header)
-	var title := Label.new()
-	title.text = "Worldsmith"
-	title.add_theme_font_size_override("font_size", 34)
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(title)
-	var settings_button := Button.new()
-	settings_button.text = "Settings · desktop only" if panel_mode else "Settings"
-	settings_button.disabled = panel_mode
-	settings_button.pressed.connect(func() -> void: settings_dialog.popup_centered(Vector2i(520, 260)))
-	header.add_child(settings_button)
-	var intro := Label.new()
-	intro.text = "Create and manage scenes and reusable 3D assets. A production brief is a plan; walkability also requires 3D geometry and collision. Dimmed actions are not built yet or need the desktop app."
-	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	page.add_child(intro)
-	var columns := HBoxContainer.new()
-	columns.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	columns.add_theme_constant_override("separation", 18)
-	page.add_child(columns)
-	var scene_column := _section(columns, "Scenes")
-	scene_list = ItemList.new()
-	scene_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scene_list.item_selected.connect(_on_scene_selected)
-	scene_list.item_activated.connect(func(_index: int) -> void: _open_selected_scene(false))
-	scene_column.add_child(scene_list)
-	scene_details = Label.new()
-	scene_details.text = "Select a scene to inspect it."
-	scene_details.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	scene_column.add_child(scene_details)
-	var scene_actions := GridContainer.new()
-	scene_actions.columns = 2
-	scene_column.add_child(scene_actions)
-	_button(scene_actions, "Create Scene", func() -> void: create_dialog.popup_centered(Vector2i(520, 190)), Availability.DESKTOP)
-	_button(scene_actions, "Import Scene", func() -> void: scene_file_dialog.popup_centered_ratio(), Availability.DESKTOP)
-	_button(scene_actions, "Load for Editing", func() -> void: _open_selected_scene(false))
-	_button(scene_actions, "Run Scene", func() -> void: _open_selected_scene(true))
-	_button(scene_actions, "Plan Scene", func() -> void: _plan_selected_scene(), Availability.DESKTOP)
-	_button(scene_actions, "View Brief", func() -> void: _view_brief())
-	_button(scene_actions, "Build from Brief", Callable(), Availability.PLANNED)
-	_button(scene_actions, "Review Collision", func() -> void: _review_collision())
-	_button(scene_actions, "Refresh", func() -> void: _refresh_all())
-	var asset_column := _section(columns, "Reusable 3D assets")
-	asset_list = ItemList.new()
-	asset_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	asset_list.item_selected.connect(_on_asset_selected)
-	asset_column.add_child(asset_list)
-	asset_details = Label.new()
-	asset_details.text = "Select an asset to inspect it."
-	asset_details.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	asset_column.add_child(asset_details)
-	asset_request_label = Label.new()
-	asset_column.add_child(asset_request_label)
-	var asset_actions := GridContainer.new()
-	asset_actions.columns = 2
-	asset_column.add_child(asset_actions)
-	_button(asset_actions, "Request Asset", func() -> void: asset_dialog.popup_centered(Vector2i(520, 190)), Availability.DESKTOP)
-	_button(asset_actions, "Import Asset", func() -> void: asset_file_dialog.popup_centered_ratio(), Availability.DESKTOP)
-	_button(asset_actions, "Edit in Blender", func() -> void: _edit_selected_asset(), Availability.DESKTOP)
-	_button(asset_actions, "Generate Asset", Callable(), Availability.PLANNED)
-	_button(asset_actions, "Review and Promote", Callable(), Availability.PLANNED)
-	_button(asset_actions, "Refresh", func() -> void: _refresh_all())
-	status_label = Label.new()
-	status_label.text = "Connecting to the local server…"
+	page.add_child(_build_header())
+	scenes_view = _build_view(page, "Scenes", [
+		["New scene", func() -> void: create_dialog.popup_centered(Vector2i(520, 190))],
+		["Import a GLB", func() -> void: _choose_geometry("")],
+	])
+	scene_rows = scenes_view.get_meta("rows")
+	scene_detail = scenes_view.get_meta("detail")
+	assets_view = _build_view(page, "Asset library", [
+		["Import an asset", func() -> void: asset_file_dialog.popup_centered_ratio()],
+		["Request an asset", func() -> void: asset_dialog.popup_centered(Vector2i(520, 190))],
+	])
+	asset_rows = assets_view.get_meta("rows")
+	asset_detail = assets_view.get_meta("detail")
+	assets_view.visible = false
+	status_label = WorldsmithTheme.label("Connecting to the scene server…", 14, WorldsmithTheme.MUTED)
 	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	page.add_child(status_label)
 	_build_dialogs()
@@ -172,28 +130,94 @@ func _build_interface() -> void:
 	add_child(collision_review)
 
 
-func _section(parent: HBoxContainer, heading: String) -> VBoxContainer:
-	var panel := PanelContainer.new()
-	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	parent.add_child(panel)
-	var padding := MarginContainer.new()
+func _margin(size: int) -> MarginContainer:
+	var margin := MarginContainer.new()
 	for side in ["left", "top", "right", "bottom"]:
-		padding.add_theme_constant_override("margin_" + side, 16)
-	panel.add_child(padding)
+		margin.add_theme_constant_override("margin_" + side, size)
+	return margin
+
+
+func _build_header() -> HBoxContainer:
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 8)
+	var wordmark := WorldsmithTheme.label("Worldsmith", 30, WorldsmithTheme.CHALK, WorldsmithTheme.serif(600))
+	header.add_child(wordmark)
+	var gap := Control.new()
+	gap.custom_minimum_size = Vector2(28, 0)
+	header.add_child(gap)
+	var tabs := ButtonGroup.new()
+	_tab(header, tabs, "Scenes", true)
+	_tab(header, tabs, "Asset library", false)
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(spacer)
+	connection_label = WorldsmithTheme.label("", 13, WorldsmithTheme.MUTED)
+	connection_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	header.add_child(connection_label)
+	_button(header, "Settings", func() -> void: settings_dialog.popup_centered(Vector2i(520, 260)), Availability.DESKTOP)
+	return header
+
+
+func _tab(parent: Control, group: ButtonGroup, label: String, scenes_tab: bool) -> void:
+	var tab := Button.new()
+	tab.text = label
+	tab.theme_type_variation = "TabButton"
+	tab.toggle_mode = true
+	tab.button_group = group
+	tab.button_pressed = scenes_tab
+	tab.pressed.connect(func() -> void:
+		scenes_view.visible = scenes_tab
+		assets_view.visible = not scenes_tab
+	)
+	parent.add_child(tab)
+
+
+# A list on the left and a sheet for the chosen entry on the right.
+func _build_view(page: Control, heading: String, actions: Array) -> HBoxContainer:
+	var view := HBoxContainer.new()
+	view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	view.add_theme_constant_override("separation", 28)
+	page.add_child(view)
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 12)
-	padding.add_child(column)
-	var label := Label.new()
-	label.text = heading
-	label.add_theme_font_size_override("font_size", 23)
-	column.add_child(label)
-	return column
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	column.add_theme_constant_override("separation", 10)
+	view.add_child(column)
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 10)
+	column.add_child(top)
+	var title := WorldsmithTheme.label(heading, 22, WorldsmithTheme.CHALK, WorldsmithTheme.serif())
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_child(title)
+	for action in actions:
+		_button(top, action[0], action[1], Availability.DESKTOP)
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	column.add_child(scroll)
+	var rows := VBoxContainer.new()
+	rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rows.add_theme_constant_override("separation", 0)
+	scroll.add_child(rows)
+	var sheet := PanelContainer.new()
+	sheet.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	view.add_child(sheet)
+	var padding := _margin(14)
+	sheet.add_child(padding)
+	var detail := VBoxContainer.new()
+	detail.add_theme_constant_override("separation", 12)
+	padding.add_child(detail)
+	view.set_meta("rows", rows)
+	view.set_meta("detail", detail)
+	return view
 
 
-func _button(parent: Control, label: String, handler: Callable, availability := Availability.READY) -> Button:
+func _button(parent: Control, label: String, handler: Callable, availability := Availability.READY, primary := false) -> Button:
 	var button := Button.new()
 	button.text = label
-	button.custom_minimum_size = Vector2(250, 38)
+	button.custom_minimum_size = Vector2(0, 40)
+	if primary:
+		button.theme_type_variation = "PrimaryButton"
+		button.custom_minimum_size = Vector2(0, 48)
 	if availability == Availability.PLANNED:
 		button.text += " · not built yet"
 		button.disabled = true
@@ -204,6 +228,310 @@ func _button(parent: Control, label: String, handler: Callable, availability := 
 		button.pressed.connect(handler)
 	parent.add_child(button)
 	return button
+
+
+# One entry in a list: a serif name, a quiet second line, and its state on the right.
+func _row(parent: Control, group: ButtonGroup, title: String, subtitle: String, state: String, state_color: Color) -> Button:
+	var row := Button.new()
+	row.theme_type_variation = "RowButton"
+	row.toggle_mode = true
+	row.button_group = group
+	row.custom_minimum_size = Vector2(0, 66)
+	parent.add_child(row)
+	var padding := _margin(14)
+	padding.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	padding.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(padding)
+	var line := HBoxContainer.new()
+	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	line.add_theme_constant_override("separation", 14)
+	padding.add_child(line)
+	var words := VBoxContainer.new()
+	words.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	words.alignment = BoxContainer.ALIGNMENT_CENTER
+	words.add_theme_constant_override("separation", 0)
+	line.add_child(words)
+	var name_label := WorldsmithTheme.label(title, 19, WorldsmithTheme.CHALK, WorldsmithTheme.serif())
+	name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	words.add_child(name_label)
+	if not subtitle.is_empty():
+		words.add_child(WorldsmithTheme.label(subtitle, 13, WorldsmithTheme.MUTED))
+	var state_label := WorldsmithTheme.label(state, 14, state_color)
+	state_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	line.add_child(state_label)
+	return row
+
+
+func _clear(container: Control) -> void:
+	for child in container.get_children():
+		container.remove_child(child)
+		child.queue_free()
+
+
+func _note(parent: Control, text: String, size: int = 15, color: Color = WorldsmithTheme.MUTED) -> Label:
+	var note := WorldsmithTheme.label(text, size, color)
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	parent.add_child(note)
+	return note
+
+
+func _refresh_all() -> void:
+	status_label.text = "Loading scenes and assets…"
+	var scene_result := await _api("/api/scenes")
+	_show_connection(scene_result["ok"])
+	if not scene_result["ok"]:
+		status_label.text = str(scene_result["message"])
+		return
+	scenes = scene_result["data"]
+	var asset_result := await _api("/api/library/assets")
+	if not asset_result["ok"]:
+		status_label.text = str(asset_result["message"])
+		return
+	assets = []
+	for item in asset_result["data"]:
+		if item["kind"] == "mesh":
+			assets.append(item)
+	var requests_result := await _api("/api/library/requests")
+	waiting_requests = (requests_result["data"] as Array).size() if requests_result["ok"] else -1
+	_fill_scene_rows()
+	_fill_asset_rows()
+	var preferred := selected_scene
+	if preferred.is_empty():
+		preferred = str(get_tree().root.get_meta("worldsmith_scene_id", ""))
+	if preferred.is_empty():
+		preferred = _argument_value(OS.get_cmdline_user_args(), "--scene-id=")
+	_select_scene_id(preferred)
+	_select_asset_id(selected_asset)
+	status_label.text = ""
+
+
+func _show_connection(online: bool) -> void:
+	var host := _http_base().trim_prefix("http://").trim_prefix("https://")
+	connection_label.text = ("Connected to " if online else "Can't reach ") + host
+	connection_label.add_theme_color_override("font_color", WorldsmithTheme.MOSS if online else WorldsmithTheme.CLAY)
+
+
+func _fill_scene_rows() -> void:
+	_clear(scene_rows)
+	scene_buttons = {}
+	var group := ButtonGroup.new()
+	for item in scenes:
+		var scene_id := str(item["scene_id"])
+		var title := _scene_title(item)
+		var row := _row(scene_rows, group, title if not title.is_empty() else scene_id,
+			scene_id if not title.is_empty() else "", _scene_state(item), _scene_color(item))
+		row.pressed.connect(_on_scene_selected.bind(scene_id))
+		scene_buttons[scene_id] = row
+	if scenes.is_empty():
+		_note(scene_rows, "No scenes yet. Create one, or import a GLB exported from Blender.")
+
+
+func _fill_asset_rows() -> void:
+	_clear(asset_rows)
+	asset_buttons = {}
+	var group := ButtonGroup.new()
+	for item in assets:
+		var asset_id := str(item["asset_id"])
+		var reviewed := bool(item.get("metadata", {}).get("godot_review", false))
+		var row := _row(asset_rows, group, asset_id, str(item["origin"]).capitalize(),
+			"Reviewed" if reviewed else "Not reviewed", WorldsmithTheme.MOSS if reviewed else WorldsmithTheme.MUTED)
+		row.pressed.connect(_on_asset_selected.bind(asset_id))
+		asset_buttons[asset_id] = row
+	if assets.is_empty():
+		_note(asset_rows, "No reusable meshes yet. Import a GLB to start the library.")
+
+
+# Selects the named scene, or the first one when it is not listed.
+func _select_scene_id(scene_id: String) -> void:
+	if not scene_buttons.has(scene_id):
+		scene_id = str(scenes[0]["scene_id"]) if not scenes.is_empty() else ""
+	if scene_buttons.has(scene_id):
+		(scene_buttons[scene_id] as Button).button_pressed = true
+	_on_scene_selected(scene_id)
+
+
+func _select_asset_id(asset_id: String) -> void:
+	if not asset_buttons.has(asset_id):
+		asset_id = str(assets[0]["asset_id"]) if not assets.is_empty() else ""
+	if asset_buttons.has(asset_id):
+		(asset_buttons[asset_id] as Button).button_pressed = true
+	_on_asset_selected(asset_id)
+
+
+func _on_scene_selected(scene_id: String) -> void:
+	selected_scene = scene_id
+	_clear(scene_detail)
+	var item := _selected_scene_item()
+	if item.is_empty():
+		_note(scene_detail, "Scenes you create or import appear here.")
+		return
+	var title := _scene_title(item)
+	var heading := _note(scene_detail, title if not title.is_empty() else scene_id, 26, WorldsmithTheme.CHALK)
+	heading.add_theme_font_override("font", WorldsmithTheme.serif())
+	heading.max_lines_visible = 2
+	heading.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_note(scene_detail, "%s, revision %d, %d placed objects" % [scene_id, item["revision"], item["object_count"]], 13)
+	_note(scene_detail, _scene_summary(item), 17, _scene_color(item))
+	var actions := _scene_actions(item)
+	_button(scene_detail, actions[0][0], actions[0][1], actions[0][2], true)
+	var others := HFlowContainer.new()
+	others.add_theme_constant_override("h_separation", 8)
+	others.add_theme_constant_override("v_separation", 8)
+	scene_detail.add_child(others)
+	for action in actions.slice(1):
+		_button(others, action[0], action[1], action[2])
+	var spacer := Control.new()
+	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scene_detail.add_child(spacer)
+	_note(scene_detail, "From prompt to walkable scene", 13)
+	var steps := _scene_steps(item)
+	for index in range(steps.size()):
+		_step(scene_detail, index + 1, steps[index])
+
+
+# The prompt a scene was planned from, when it has one, reads better than its ID.
+func _scene_title(item: Dictionary) -> String:
+	var title := str(item.get("title", ""))
+	return title.left(1).to_upper() + title.substr(1)
+
+
+func _scene_state(item: Dictionary) -> String:
+	if item["has_walkable"]:
+		return "Walkable"
+	if item["has_environment"]:
+		return "Needs collision review"
+	return "Planned" if item["has_brief"] else "Empty"
+
+
+func _scene_color(item: Dictionary) -> Color:
+	if item["has_walkable"]:
+		return WorldsmithTheme.MOSS
+	if item["has_environment"]:
+		return WorldsmithTheme.CLAY
+	return WorldsmithTheme.SKY if item["has_brief"] else WorldsmithTheme.MUTED
+
+
+func _scene_summary(item: Dictionary) -> String:
+	if item["has_walkable"]:
+		return "Ready to walk."
+	if item["has_environment"]:
+		return "It has geometry, but nothing to stand on yet."
+	return "Planned. It has no geometry yet." if item["has_brief"] else "Empty. Plan it, or add geometry."
+
+
+# What can be done with a scene, most useful first. The first entry is the main button.
+func _scene_actions(item: Dictionary) -> Array:
+	var has_geometry := bool(item["has_environment"])
+	var has_brief := bool(item["has_brief"])
+	var actions: Array = []
+	if item["has_walkable"]:
+		actions.append(["Run scene", func() -> void: _open_selected_scene(true), Availability.READY])
+	if has_geometry:
+		actions.append(["Review collision", _review_collision, Availability.READY])
+	elif not has_brief:
+		actions.append(["Plan this scene", _plan_selected_scene, Availability.DESKTOP])
+	if not has_geometry:
+		actions.append(["Add geometry from a GLB", func() -> void: _choose_geometry(selected_scene), Availability.DESKTOP])
+	if has_brief:
+		actions.append(["View brief", _view_brief, Availability.READY])
+	actions.append(["Edit scene", func() -> void: _open_selected_scene(false), Availability.READY])
+	if has_brief and not has_geometry:
+		actions.append(["Plan again", _plan_selected_scene, Availability.DESKTOP])
+	if not has_geometry:
+		actions.append(["Build from brief", Callable(), Availability.PLANNED])
+	return actions
+
+
+# The four stages every scene passes through, with where this one stands.
+func _scene_steps(item: Dictionary) -> Array:
+	var done := WorldsmithTheme.MOSS
+	var next := WorldsmithTheme.BRASS
+	var waiting := WorldsmithTheme.FAINT
+	var has_geometry := bool(item["has_environment"])
+	var walkable := bool(item["has_walkable"])
+	return [
+		["Plan", "Brief saved" if item["has_brief"] else "No brief. Optional when you import geometry.",
+			done if item["has_brief"] else waiting],
+		["Build geometry", "Environment imported" if has_geometry else "Import a GLB for now. Building from a brief is not built yet.",
+			done if has_geometry else next],
+		["Review collision", "Walkable surfaces and spawn point saved" if walkable else ("Needs your review" if has_geometry else "Waits for geometry"),
+			done if walkable else (next if has_geometry else waiting)],
+		["Walk and edit", "Ready on desktop and headset" if walkable else "Waits for collision",
+			done if walkable else waiting],
+	]
+
+
+func _step(parent: Control, number: int, step: Array) -> void:
+	var line := HBoxContainer.new()
+	line.add_theme_constant_override("separation", 12)
+	parent.add_child(line)
+	var marker := WorldsmithTheme.label(str(number), 20, step[2], WorldsmithTheme.serif())
+	marker.custom_minimum_size = Vector2(20, 0)
+	line.add_child(marker)
+	var words := VBoxContainer.new()
+	words.add_theme_constant_override("separation", 0)
+	words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	line.add_child(words)
+	words.add_child(WorldsmithTheme.label(step[0], 15))
+	_note(words, step[1], 13)
+
+
+func _on_asset_selected(asset_id: String) -> void:
+	selected_asset = asset_id
+	_clear(asset_detail)
+	var item := {}
+	for candidate in assets:
+		if candidate["asset_id"] == asset_id:
+			item = candidate
+	if item.is_empty():
+		_note(asset_detail, "Reusable meshes you import appear here.")
+		return
+	var reviewed := bool(item.get("metadata", {}).get("godot_review", false))
+	var heading := _note(asset_detail, asset_id, 28, WorldsmithTheme.CHALK)
+	heading.add_theme_font_override("font", WorldsmithTheme.serif())
+	_note(asset_detail, "%s mesh" % str(item["origin"]).capitalize(), 13)
+	_note(asset_detail, "Reviewed in Godot. It can fulfil an asset request." if reviewed else "Not reviewed yet, so it can't fulfil an asset request.",
+		17, WorldsmithTheme.MOSS if reviewed else WorldsmithTheme.CLAY)
+	_button(asset_detail, "Edit in Blender", _edit_selected_asset, Availability.DESKTOP, true)
+	var others := HFlowContainer.new()
+	others.add_theme_constant_override("h_separation", 8)
+	others.add_theme_constant_override("v_separation", 8)
+	asset_detail.add_child(others)
+	_button(others, "Review and promote", Callable(), Availability.PLANNED)
+	_button(others, "Generate asset", Callable(), Availability.PLANNED)
+	var spacer := Control.new()
+	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	asset_detail.add_child(spacer)
+	if waiting_requests >= 0:
+		_note(asset_detail, "%d asset requests are waiting to be produced." % waiting_requests, 13)
+
+
+func _choose_geometry(target_scene: String) -> void:
+	import_target = target_scene
+	scene_file_dialog.popup_centered_ratio()
+
+
+func _import_scene(path: String) -> void:
+	var bytes := _read_glb(path)
+	if bytes.is_empty():
+		return
+	var scene_id := import_target
+	status_label.text = "Importing scene…"
+	if scene_id.is_empty():
+		scene_id = _slug(path.get_file()) + "-" + str(int(Time.get_unix_time_from_system()))
+		var created := await _api("/api/scenes", HTTPClient.METHOD_POST, {"scene_id": scene_id})
+		if not created["ok"]:
+			status_label.text = str(created["message"])
+			return
+	var uploaded := await _upload("/api/scenes/" + scene_id + "/environment", bytes, path.get_file())
+	selected_scene = scene_id
+	await _refresh_all()
+	if not uploaded["ok"]:
+		status_label.text = "GLB import failed: " + str(uploaded["message"])
+		return
+	status_label.text = "Imported the GLB. Review its collision to make it walkable."
+	collision_review.open(scene_id)
 
 
 func _build_dialogs() -> void:
@@ -258,7 +586,7 @@ func _build_dialogs() -> void:
 func _build_brief_panel() -> void:
 	brief_panel = ColorRect.new()
 	brief_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	brief_panel.color = Color(0.055, 0.075, 0.105)
+	brief_panel.color = WorldsmithTheme.GROUND
 	brief_panel.visible = false
 	add_child(brief_panel)
 	var padding := MarginContainer.new()
@@ -269,15 +597,12 @@ func _build_brief_panel() -> void:
 	var rows := VBoxContainer.new()
 	rows.add_theme_constant_override("separation", 12)
 	padding.add_child(rows)
-	var heading := Label.new()
-	heading.text = "Scene production brief"
-	heading.add_theme_font_size_override("font_size", 23)
-	rows.add_child(heading)
+	rows.add_child(WorldsmithTheme.label("Scene production brief", 26, WorldsmithTheme.CHALK, WorldsmithTheme.serif()))
 	brief_text = TextEdit.new()
 	brief_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	brief_text.editable = false
 	brief_text.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
-	brief_text.add_theme_color_override("font_readonly_color", Color(0.93, 0.95, 0.98))
+	brief_text.add_theme_color_override("font_readonly_color", WorldsmithTheme.CHALK)
 	rows.add_child(brief_text)
 	var close := _button(rows, "Back to Home", func() -> void: brief_panel.visible = false)
 	close.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
@@ -361,80 +686,6 @@ func _download_glb(path: String) -> Dictionary:
 	return {"ok": true, "bytes": bytes}
 
 
-func _refresh_all() -> void:
-	status_label.text = "Loading scenes and assets…"
-	var scene_result := await _api("/api/scenes")
-	if not scene_result["ok"]:
-		status_label.text = str(scene_result["message"])
-		return
-	scenes = scene_result["data"]
-	scene_list.clear()
-	for item in scenes:
-		var index := scene_list.add_item(str(item["scene_id"]) + " · " + _scene_state(item))
-		scene_list.set_item_metadata(index, str(item["scene_id"]))
-	var asset_result := await _api("/api/library/assets")
-	if not asset_result["ok"]:
-		status_label.text = str(asset_result["message"])
-		return
-	assets = []
-	for item in asset_result["data"]:
-		if item["kind"] == "mesh":
-			assets.append(item)
-	asset_list.clear()
-	for item in assets:
-		var index := asset_list.add_item(str(item["asset_id"]) + " · " + str(item["origin"]))
-		asset_list.set_item_metadata(index, str(item["asset_id"]))
-	var requests_result := await _api("/api/library/requests")
-	if requests_result["ok"]:
-		asset_request_label.text = "%d asset production requests waiting" % (requests_result["data"] as Array).size()
-	else:
-		asset_request_label.text = "Asset requests unavailable"
-	var preferred := selected_scene
-	if preferred.is_empty():
-		preferred = str(get_tree().root.get_meta("worldsmith_scene_id", ""))
-	if preferred.is_empty():
-		preferred = _argument_value(OS.get_cmdline_user_args(), "--scene-id=")
-	_select_scene_id(preferred)
-	_select_asset_id(selected_asset)
-	status_label.text = "%d scenes · %d reusable assets" % [scenes.size(), assets.size()]
-
-
-func _select_scene_id(scene_id: String) -> void:
-	for index in range(scene_list.item_count):
-		if str(scene_list.get_item_metadata(index)) == scene_id:
-			scene_list.select(index)
-			_on_scene_selected(index)
-			return
-	selected_scene = ""
-	scene_details.text = "Select a scene to inspect it."
-
-
-func _select_asset_id(asset_id: String) -> void:
-	for index in range(asset_list.item_count):
-		if str(asset_list.get_item_metadata(index)) == asset_id:
-			asset_list.select(index)
-			_on_asset_selected(index)
-			return
-	selected_asset = ""
-	asset_details.text = "Select an asset to inspect it."
-
-
-func _on_scene_selected(index: int) -> void:
-	selected_scene = str(scene_list.get_item_metadata(index))
-	for item in scenes:
-		if item["scene_id"] == selected_scene:
-			scene_details.text = "%s · revision %d · %d objects" % [_scene_state(item), item["revision"], item["object_count"]]
-			return
-
-
-func _scene_state(item: Dictionary) -> String:
-	if item["has_walkable"]:
-		return "walkable"
-	if item["has_environment"]:
-		return "3D source, collision not reviewed"
-	return "planned, geometry pending" if item["has_brief"] else "empty"
-
-
 func _selected_scene_item() -> Dictionary:
 	for item in scenes:
 		if item["scene_id"] == selected_scene:
@@ -454,15 +705,6 @@ func _on_collision_review_closed(message: String) -> void:
 		return
 	await _refresh_all()
 	status_label.text = message
-
-
-func _on_asset_selected(index: int) -> void:
-	selected_asset = str(asset_list.get_item_metadata(index))
-	for item in assets:
-		if item["asset_id"] == selected_asset:
-			var reviewed := bool(item.get("metadata", {}).get("godot_review", false))
-			asset_details.text = "%s · %s" % [str(item["kind"]), "Godot reviewed" if reviewed else "review pending"]
-			return
 
 
 func _valid_id(value: String) -> bool:
@@ -491,26 +733,6 @@ func _create_scene() -> void:
 	selected_scene = scene_id
 	await _refresh_all()
 	status_label.text = "Created empty scene. Select Plan Scene or Import Scene to add content."
-
-
-func _import_scene(path: String) -> void:
-	var bytes := _read_glb(path)
-	if bytes.is_empty():
-		return
-	var scene_id := _slug(path.get_file()) + "-" + str(int(Time.get_unix_time_from_system()))
-	status_label.text = "Importing scene…"
-	var created := await _api("/api/scenes", HTTPClient.METHOD_POST, {"scene_id": scene_id})
-	if not created["ok"]:
-		status_label.text = str(created["message"])
-		return
-	var uploaded := await _upload("/api/scenes/" + scene_id + "/environment", bytes, path.get_file())
-	selected_scene = scene_id
-	await _refresh_all()
-	if not uploaded["ok"]:
-		status_label.text = "Scene project created, but GLB import failed: " + str(uploaded["message"])
-		return
-	status_label.text = "Imported scene GLB. Review its collision to make it walkable."
-	collision_review.open(scene_id)
 
 
 func _import_asset(path: String) -> void:
@@ -563,7 +785,7 @@ func _view_brief() -> void:
 		return
 	var brief: Dictionary = result["data"]["brief"]
 	var lines: Array[String] = [
-		"SCENE PLAN SAVED · 3D ASSETS STILL NEEDED", "",
+		"The plan is saved. Its 3D assets still need to be made.", "",
 		"Concept: " + str(brief.get("concept", "")), "",
 		"Visual direction: " + str(brief.get("visual_direction", "")), "",
 		"Walkable layout: " + str(brief.get("walkable_layout", "")), "",

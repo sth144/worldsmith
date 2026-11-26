@@ -9,9 +9,9 @@ signal closed(message: String)
 
 const ROLES := ["walkable", "solid", "none"]
 const ROLE_COLORS := {
-	"walkable": Color(0.45, 0.9, 0.6),
-	"solid": Color(0.95, 0.75, 0.4),
-	"none": Color(0.6, 0.64, 0.7),
+	"walkable": WorldsmithTheme.MOSS,
+	"solid": WorldsmithTheme.BRASS,
+	"none": WorldsmithTheme.MUTED,
 }
 
 var api: Callable
@@ -26,7 +26,7 @@ var status: Label
 
 func _init(api_call: Callable) -> void:
 	api = api_call
-	color = Color(0.055, 0.075, 0.105)
+	color = WorldsmithTheme.GROUND
 	visible = false
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var padding := MarginContainer.new()
@@ -37,8 +37,7 @@ func _init(api_call: Callable) -> void:
 	var rows := VBoxContainer.new()
 	rows.add_theme_constant_override("separation", 12)
 	padding.add_child(rows)
-	heading = Label.new()
-	heading.add_theme_font_size_override("font_size", 23)
+	heading = WorldsmithTheme.label("", 26, WorldsmithTheme.CHALK, WorldsmithTheme.serif())
 	rows.add_child(heading)
 	var help := Label.new()
 	help.text = "Select a mesh to change its role. Walkable: you can stand on it and teleport to it. Solid: it blocks movement. None: you pass through it. A role also applies to meshes whose names contain that mesh's name."
@@ -56,7 +55,7 @@ func _init(api_call: Callable) -> void:
 	actions.add_theme_constant_override("separation", 12)
 	rows.add_child(actions)
 	_button(actions, "Use Suggestions", _use_suggestions)
-	_button(actions, "Save", _save)
+	_button(actions, "Save collision", _save).theme_type_variation = "PrimaryButton"
 	_button(actions, "Back to Home", func() -> void: _close(""))
 
 
@@ -78,17 +77,18 @@ func _spawn_row() -> HBoxContainer:
 	return row
 
 
-func _button(parent: Control, label: String, handler: Callable) -> void:
+func _button(parent: Control, label: String, handler: Callable) -> Button:
 	var button := Button.new()
 	button.text = label
-	button.custom_minimum_size = Vector2(200, 38)
+	button.custom_minimum_size = Vector2(0, 40)
 	button.pressed.connect(handler)
 	parent.add_child(button)
+	return button
 
 
 func open(target_scene: String) -> void:
 	scene_id = target_scene
-	heading.text = "Review collision · " + scene_id
+	heading.text = "Review collision for " + scene_id
 	meshes = []
 	mesh_list.clear()
 	status.text = "Measuring meshes…"
@@ -115,7 +115,7 @@ func _set_spawn(spawn: Array) -> void:
 func _show_row(index: int) -> void:
 	var mesh: Dictionary = meshes[index]
 	var size: Array = mesh["size"]
-	mesh_list.set_item_text(index, "%s  ·  %.1f × %.1f × %.1f m  ·  %s" % [mesh["name"], size[0], size[1], size[2], mesh["role"]])
+	mesh_list.set_item_text(index, "%s    %.1f × %.1f × %.1f m    %s" % [mesh["name"], size[0], size[1], size[2], mesh["role"].capitalize()])
 	mesh_list.set_item_custom_fg_color(index, ROLE_COLORS[mesh["role"]])
 
 
