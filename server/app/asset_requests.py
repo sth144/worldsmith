@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -18,10 +19,16 @@ sys.path.insert(0, str(REPO / "scripts"))
 from asset_library import AssetLibrary, digest  # noqa: E402
 
 
+# A request waits (needs_asset), is claimed by whoever is building it (in_progress),
+# and ends placed (complete) or abandoned with a reason (failed).
+OPEN_STATES = ("needs_asset", "in_progress")
+
+
 def create_asset_request(project: Path, scene_id: str, revision: int,
                          prompt: str, target: list[float]) -> dict:
     job = {
         "id": str(uuid4()), "kind": "asset_request", "status": "needs_asset",
+        "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "scene_id": scene_id, "revision": revision, "prompt": prompt,
         "target_position": target,
         "requirements": ["editable source or reproducible generation", "Godot visual review",
@@ -45,6 +52,32 @@ def read_asset_request(project: Path, job_id: str) -> dict:
         raise HTTPException(500, "Invalid stored asset request") from exc
     if job.get("kind") != "asset_request":
         raise HTTPException(404, "Asset request not found")
+    return job
+
+
+def list_asset_requests(project: Path) -> list[dict]:
+    """Every asset request saved for a scene, oldest first. Unreadable files are skipped."""
+    found = []
+    for path in sorted((project / "jobs").glob("*.json")) if (project / "jobs").is_dir() else []:
+        try:
+            job = json.loads(path.read_text())
+        except ValueError:
+            continue
+        if isinstance(job, dict) and job.get("kind") == "asset_request":
+            found.append(job)
+    return sorted(found, key=lambda job: str(job.get("created", "")))
+
+
+def set_request_status(project: Path, job_id: str, status: str, note: str | None) -> dict:
+    """Claim, release, or abandon a request that has not been placed yet."""
+    job = read_asset_request(project, job_id)
+    if job["status"] not in OPEN_STATES and job["status"] != "failed":
+        raise HTTPException(422, "Asset request is no longer open")
+    job["status"] = status
+    job.pop("note", None)
+    if note:
+        job["note"] = note
+    write_json(project / "jobs" / f"{job_id}.json", job)
     return job
 
 

@@ -16,6 +16,7 @@
 - Optional microphone transcription and review before sending scene commands.
 - Versioned geometry edits with explicit approval and portable scene export.
 - Quest build and deployment support.
+- In-scene asset requests form a queue that an agent or a person can list, claim, fulfil, or fail, with progress shown on the home screen and in the scene. Requests stay valid when the scene is edited.
 - Review Collision suggests walkable and solid meshes and a spawn point for an imported environment, and saves the reviewed roles. A scene cannot be run until it has walkable collision.
 - The home screen has a new look: scenes are named by their prompt, and each shows one main action and its progress through plan, geometry, collision, and walking.
 - A home screen on desktop and on a headset panel lists scenes and reusable assets, opens a scene to edit or run, and shows planned actions as not built yet.

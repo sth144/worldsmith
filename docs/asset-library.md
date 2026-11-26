@@ -36,19 +36,24 @@ The library records kind, origin, license, attribution, hash, and metadata. Use 
 
 A scene's placement catalog is separate: `data/projects/<scene_id>/catalog.json` selects which project GLBs appear in the inventory. Its `assets` object maps GLB stem IDs to `name` and optional `walkable` metadata. The client downloads those assets and builds inventory pages at runtime. A library entry is not automatically placed in every scene.
 
-## Reviewed creation requests
+## Reviewed creation requests and the queue
 
-The client defaults to **Reviewed asset** when a prompt requests an object absent from the scene catalog. The server saves the prompt and viewed target as a scene-scoped request with status `needs_asset`; it does not silently generate primitive geometry or change the scene revision. **Quick draft shapes** remains an explicit client option. Existing catalog assets can still be placed immediately.
+The client defaults to **Reviewed asset** when a prompt requests an object absent from the scene catalog. The server saves the prompt and the viewed point as a scene request with status `needs_asset`; it does not generate primitive geometry or change the scene. **Quick draft shapes** remains an explicit client option. Existing catalog assets can still be placed immediately.
 
-After authoring and reviewing a mesh in Godot, register it with `--metadata '{"godot_review":true}'` and promote its immutable version in the library. Fulfill the request against the current scene revision:
+Saved requests form a queue that a person or an agent works through:
 
 ```sh
-curl -X POST http://127.0.0.1:8765/api/scenes/<scene-id>/asset-requests/<request-id>/fulfill \
-  -H 'Content-Type: application/json' \
-  -d '{"expected_revision":0,"asset_id":"<library-asset-id>"}'
+python3 scripts/request_queue.py list
+python3 scripts/request_queue.py claim <scene-id> <request-id> --note "Building in Blender"
+python3 scripts/request_queue.py fulfil <scene-id> <request-id> <library-asset-id> --name "Display name"
+python3 scripts/request_queue.py fail <scene-id> <request-id> --note "Why it could not be made"
 ```
 
-Fulfillment verifies that the asset is a promoted GLB mesh with recorded Godot visual approval, checks its content hash, copies that version into the project, adds it to the catalog, and places it at the saved target as one undoable edit. If the scene has changed since the request, submit the prompt again to establish a new target and revision. This is a human-reviewed bridge; automatic high-quality asset creation and fulfillment are not implemented yet.
+A request is `needs_asset` while it waits, `in_progress` once claimed, then `complete` or `failed`. The home screen lists a scene's unplaced requests, and the in-scene status line counts those waiting or being built. `GET /api/requests` returns the queue across all scenes.
+
+Fulfilling needs a promoted GLB mesh registered with `--metadata '{"godot_review":true}'`. The server checks its content hash, copies that version into the project, adds it to the scene's catalog, and places it at the requested point as one undoable edit. A request stores a point in the world, so it stays valid when the scene is edited after it was made.
+
+The [request queue skill](../.agents/skills/worldsmith-requests/SKILL.md) gives an agent the full procedure: build in Blender, check the structure, review captures in Godot, register, and place. Nothing starts that agent automatically, and its Godot review is the only quality check, so its review note should state the asset's faults. Requests made from the home screen's Asset library tab are a separate list and are not part of this queue.
 
 ## Quality acceptance
 

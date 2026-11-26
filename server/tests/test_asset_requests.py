@@ -68,17 +68,47 @@ def test_reviewed_prompt_waits_for_promoted_asset_then_places_immutable_version(
     assert client.get("/api/scenes/demo").json()["objects"] == []
 
 
-def test_reviewed_request_conflicts_after_scene_changes(tmp_path):
+def test_requests_queue_up_and_survive_scene_edits(tmp_path):
     client = TestClient(create_app(tmp_path / "projects"))
-    response = client.post("/api/scenes/demo/agent", json={
-        "expected_revision": 0, "prompt": "Place a sculpted arch here",
-        "view": VIEW, "creation_mode": "reviewed",
-    })
-    job_id = response.json()["job"]["id"]
-    assert client.get(f"/api/scenes/demo/asset-requests/{job_id}").json()["status"] == "needs_asset"
+    jobs = []
+    for prompt in ("Place a sculpted arch here", "Place a carved bench here"):
+        response = client.post("/api/scenes/demo/agent", json={
+            "expected_revision": 0, "prompt": prompt, "view": VIEW, "creation_mode": "reviewed"})
+        jobs.append(response.json()["job"]["id"])
+    assert [job["id"] for job in client.get("/api/requests").json()] == jobs
+    assert [job["status"] for job in client.get("/api/scenes/demo/asset-requests").json()] == ["needs_asset"] * 2
+
+    status_url = f"/api/scenes/demo/asset-requests/{jobs[0]}/status"
+    claimed = client.post(status_url, json={"status": "in_progress", "note": "Building in Blender"})
+    assert claimed.status_code == 200 and claimed.json()["note"] == "Building in Blender"
     changed = client.post("/api/scenes/demo/operations", json={"expected_revision": 0,
         "operations": [{"type": "add_object", "object": chair(str(uuid4()))}]})
     assert changed.status_code == 200
-    blocked = client.post(f"/api/scenes/demo/asset-requests/{job_id}/fulfill", json={
-        "expected_revision": 1, "asset_id": "arch"})
-    assert blocked.status_code == 409
+
+    source = tmp_path / "prop.glb"
+    minimal_glb(source)
+    library = AssetLibrary(tmp_path / "library")
+    library.register("prop", source, "mesh", "authored", "project-owned", metadata={"godot_review": True})
+    library.database.close()
+    for expected_revision, job_id in enumerate(jobs, start=2):
+        placed = client.post(f"/api/scenes/demo/asset-requests/{job_id}/fulfill", json={"asset_id": "prop"})
+        assert placed.status_code == 200, placed.text
+        assert placed.json()["revision"] == expected_revision
+        assert "note" not in placed.json()["job"]
+    assert client.get("/api/requests").json() == []
+    assert len(client.get("/api/scenes/demo").json()["objects"]) == 3
+    assert client.post(status_url, json={"status": "failed"}).status_code == 422
+
+
+def test_failed_request_stays_listed_with_its_reason(tmp_path):
+    client = TestClient(create_app(tmp_path / "projects"))
+    job_id = client.post("/api/scenes/demo/agent", json={
+        "expected_revision": 0, "prompt": "Place a sculpted arch here",
+        "view": VIEW, "creation_mode": "reviewed"}).json()["job"]["id"]
+    url = f"/api/scenes/demo/asset-requests/{job_id}"
+    failed = client.post(url + "/status", json={"status": "failed", "note": "Could not reach the quality bar"})
+    assert failed.json()["status"] == "failed"
+    assert client.get("/api/requests").json()[0]["note"] == "Could not reach the quality bar"
+    assert client.post(url + "/fulfill", json={"asset_id": "prop"}).status_code == 422
+    assert client.post(url + "/status", json={"status": "needs_asset"}).json()["status"] == "needs_asset"
+    assert client.post(url + "/status", json={"status": "placed"}).status_code == 422

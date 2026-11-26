@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .assets import asset_path, glb_material_names, list_assets, valid_asset_paths, validate_glb, valid_scene_id
-from .asset_requests import AssetLibrary, copy_version_to_project, create_asset_request, current_mesh, read_asset_request
+from .asset_requests import OPEN_STATES, AssetLibrary, copy_version_to_project, create_asset_request, current_mesh, list_asset_requests, read_asset_request, set_request_status
 from .agent import claude_plan, claude_view_plan, codex_plan, codex_view_plan, creative_view_plan, deterministic_plan, deterministic_view_plan, generated_placement, is_creation_request, is_placement_request, resolve_aimed_target, validate_proposal
 from .collision import collision_review, save_collision
 from .export import export_scene, register_environment, scene_instance_path, scene_package, source_manifest
@@ -73,9 +73,13 @@ class AgentRequest(BaseModel):
 
 
 class FulfillAssetRequest(BaseModel):
-    expected_revision: int = Field(ge=0)
     asset_id: str = Field(min_length=1, max_length=64)
     name: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class RequestStatus(BaseModel):
+    status: Literal["needs_asset", "in_progress", "failed"]
+    note: str | None = Field(default=None, max_length=500)
 
 
 def validate_view(view: dict[str, Any] | None) -> dict:
@@ -288,7 +292,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             job = create_asset_request(store.project(scene_id), scene_id, scene["revision"],
                                        body.prompt, view["target_position"])
             return {"status": "needs_asset", "job": job,
-                    "message": "A reviewed mesh is needed. Generate or author it, promote it in the library, then fulfill this request."}
+                    "message": "The request is queued. It is placed once a reviewed mesh for it is in the library."}
         target_ids = list(body.selected_object_ids)
         target_source = "view" if place_in_view else ("selected" if target_ids else "none")
         if not place_in_view and not target_ids:
@@ -342,6 +346,26 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         return {"planner": planner, "target_source": target_source, "operations": operations,
                 "generated_designs": generated_designs, **result}
 
+    @app.get("/api/requests")
+    def list_unplaced_requests() -> list[dict]:
+        """The queue across all scenes: requests that are waiting, being built, or failed."""
+        queue = []
+        for entry in store.list_scenes():
+            queue += [job for job in list_asset_requests(store.project(entry["scene_id"]))
+                      if job["status"] != "complete"]
+        return sorted(queue, key=lambda job: str(job.get("created", "")))
+
+    @app.get("/api/scenes/{scene_id}/asset-requests")
+    def list_scene_asset_requests(scene_id: str) -> list[dict]:
+        store.read(scene_id)
+        return list_asset_requests(store.project(scene_id))
+
+    @app.post("/api/scenes/{scene_id}/asset-requests/{job_id}/status")
+    def update_asset_request_status(scene_id: str, job_id: str, body: RequestStatus) -> dict:
+        store.read(scene_id)
+        with store.lock:
+            return set_request_status(store.project(scene_id), job_id, body.status, body.note)
+
     @app.get("/api/scenes/{scene_id}/asset-requests/{job_id}")
     def get_asset_request(scene_id: str, job_id: str) -> dict:
         store.read(scene_id)
@@ -353,10 +377,9 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         with store.lock:
             scene, _ = store.read(scene_id)
             job = read_asset_request(project, job_id)
-            if job["scene_id"] != scene_id or job["status"] != "needs_asset":
+            if job["scene_id"] != scene_id or job["status"] not in OPEN_STATES:
                 raise HTTPException(422, "Asset request is no longer open")
-            if scene["revision"] != body.expected_revision or scene["revision"] != job["revision"]:
-                raise HTTPException(409, "Scene changed since this asset was requested; request it again")
+            # The request holds a point in the world, so it stays valid while the scene is edited.
             version = current_mesh(library_root, body.asset_id)
             catalog_path = project / "catalog.json"
             original_catalog = catalog_path.read_bytes() if catalog_path.is_file() else None
@@ -376,7 +399,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             operation = generated_placement(asset, job["target_position"], name)
             try:
                 write_json(catalog_path, catalog)
-                result = store.apply(scene_id, body.expected_revision, [operation])
+                result = store.apply(scene_id, scene["revision"], [operation])
             except Exception:
                 if original_catalog is None:
                     catalog_path.unlink(missing_ok=True)
@@ -385,6 +408,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                 if created:
                     (project / asset).unlink(missing_ok=True)
                 raise
+            job.pop("note", None)
             job.update({"status": "complete", "asset_id": body.asset_id,
                         "asset_sha256": version["sha256"], "project_asset": asset,
                         "object_id": operation["object"]["id"]})

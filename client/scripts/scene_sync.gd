@@ -41,6 +41,8 @@ var loaded_instance_keys: Dictionary = {}
 var geometry_job_id := ""
 var geometry_summary := ""
 var asset_request_id := ""
+var requests_waiting := 0
+var requests_building := 0
 var last_agent_details := ""
 var brief_in_flight := false
 var brief_ready := false
@@ -288,7 +290,45 @@ func _register_asset(asset_key: String, file_path: String) -> void:
 	_publish_catalog()
 
 
+# Counts this scene's requests that are waiting for, or being built by, an agent.
+func _refresh_requests() -> void:
+	var request := HTTPRequest.new()
+	add_child(request)
+	var endpoint := server_url.replace("ws://", "http://").replace("wss://", "https://")
+	request.request_completed.connect(_on_requests_loaded.bind(request))
+	if request.request(endpoint + "/api/scenes/" + scene_id + "/asset-requests") != OK:
+		request.queue_free()
+
+
+func _on_requests_loaded(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray, request: HTTPRequest) -> void:
+	request.queue_free()
+	var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
+	if result != HTTPRequest.RESULT_SUCCESS or code != 200 or not (parsed is Array):
+		return
+	var waiting := 0
+	var building := 0
+	for job in parsed:
+		if job is Dictionary and job.get("status") == "needs_asset":
+			waiting += 1
+		elif job is Dictionary and job.get("status") == "in_progress":
+			building += 1
+	if waiting != requests_waiting or building != requests_building:
+		requests_waiting = waiting
+		requests_building = building
+		status_changed.emit()
+
+
+func _queue_text() -> String:
+	var parts: Array[String] = []
+	if requests_building > 0:
+		parts.append("%d being built" % requests_building)
+	if requests_waiting > 0:
+		parts.append("%d waiting for an agent" % requests_waiting)
+	return "Requests: " + ", ".join(parts) if not parts.is_empty() else ""
+
+
 func _refresh_environment() -> void:
+	_refresh_requests()
 	if package_request_in_flight:
 		return
 	package_request_in_flight = true
@@ -580,8 +620,8 @@ func status_text() -> String:
 		return "Local only"
 	if not last_error.is_empty():
 		return "Sync error: " + last_error
-	if not asset_request_id.is_empty():
-		return "Request saved, nothing placed yet"
+	if not _queue_text().is_empty():
+		return _queue_text()
 	if brief_ready:
 		return "Scene plan saved"
 	if online:
@@ -656,6 +696,7 @@ func _on_agent_result(result: int, code: int, _headers: PackedStringArray, body:
 		if parsed is Dictionary and parsed.get("status") == "needs_asset":
 			asset_request_id = str(parsed.get("job", {}).get("id", ""))
 			last_agent_details = _format_asset_request(parsed.get("job", {}))
+			_refresh_requests()
 		if parsed is Dictionary and parsed.get("status") == "approval_required":
 			var job: Dictionary = parsed["job"]
 			geometry_job_id = str(job["id"])
@@ -665,18 +706,16 @@ func _on_agent_result(result: int, code: int, _headers: PackedStringArray, body:
 		brief_result_ready.emit()
 
 
-# Says plainly that a request was saved and nothing was placed, and what to do next.
+# Says plainly that a request was queued and nothing was placed, and what happens next.
 func _format_asset_request(job: Dictionary) -> String:
 	return "\n".join([
-		"Request saved. Nothing has been placed in the scene.",
+		"Your request is in the queue. Nothing has been placed in the scene yet.",
 		"",
 		"You asked for: " + str(job.get("prompt", "")),
 		"",
-		"This mode only places meshes that have been made and reviewed, and no mesh for this request exists yet. Nothing is building it automatically: someone, or an agent working in Blender, has to make it, add it to the asset library, and approve it. It can then be placed at the spot you were looking at.",
+		"This mode only places meshes that have been built and reviewed. An agent working the queue builds it in Blender, checks it, and places it at the spot you were looking at; it then appears here by itself. The status line shows how many requests are waiting or being built. Nothing starts until an agent is told to work the queue.",
 		"",
 		"To see something straight away, send the prompt again with the second menu set to \"Quick draft shapes\". That places simple blockout geometry.",
-		"",
-		"Request ID: " + str(job.get("id", "")),
 	])
 
 

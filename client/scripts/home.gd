@@ -25,6 +25,7 @@ var asset_buttons: Dictionary = {}
 var connection_label: Label
 var status_label: Label
 var waiting_requests := -1
+var scene_requests: Dictionary = {}
 var import_target := ""
 var brief_panel: ColorRect
 var brief_text: TextEdit
@@ -294,6 +295,10 @@ func _refresh_all() -> void:
 			assets.append(item)
 	var requests_result := await _api("/api/library/requests")
 	waiting_requests = (requests_result["data"] as Array).size() if requests_result["ok"] else -1
+	scene_requests = {}
+	var queue_result := await _api("/api/requests")
+	for job in (queue_result["data"] if queue_result["ok"] else []):
+		scene_requests.get_or_add(str(job["scene_id"]), []).append(job)
 	_fill_scene_rows()
 	_fill_asset_rows()
 	var preferred := selected_scene
@@ -373,6 +378,8 @@ func _on_scene_selected(scene_id: String) -> void:
 	heading.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	_note(scene_detail, "%s, revision %d, %d placed objects" % [scene_id, item["revision"], item["object_count"]], 13)
 	_note(scene_detail, _scene_summary(item), 17, _scene_color(item))
+	for line in _request_lines(scene_id):
+		_note(scene_detail, line, 13)
 	var actions := _scene_actions(item)
 	_button(scene_detail, actions[0][0], actions[0][1], actions[0][2], true)
 	var others := HFlowContainer.new()
@@ -394,6 +401,18 @@ func _on_scene_selected(scene_id: String) -> void:
 func _scene_title(item: Dictionary) -> String:
 	var title := str(item.get("title", ""))
 	return title.left(1).to_upper() + title.substr(1)
+
+
+# What people have asked for in this scene that has not been placed yet.
+func _request_lines(scene_id: String) -> Array[String]:
+	var states := {"needs_asset": "waiting for an agent", "in_progress": "being built", "failed": "could not be made"}
+	var lines: Array[String] = []
+	for job in scene_requests.get(scene_id, []):
+		var line := "Requested: \"%s\" is %s" % [str(job["prompt"]).left(60), states.get(job["status"], str(job["status"]))]
+		if job.has("note"):
+			line += " (%s)" % str(job["note"]).left(80)
+		lines.append(line)
+	return lines.slice(0, 3)
 
 
 func _scene_state(item: Dictionary) -> String:
