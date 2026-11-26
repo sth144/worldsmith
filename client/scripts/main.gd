@@ -498,6 +498,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		match event.keycode:
 			KEY_P:
 				_open_prompt()
+			KEY_O:
+				_on_edit_action("ai_details")
 			KEY_G:
 				_on_edit_action("move")
 			KEY_R:
@@ -1083,6 +1085,13 @@ func _update_xr_panel_ray() -> void:
 	xr_pointer.visible = true
 
 
+# The sync status, with how to read the AI's last reply when there is one.
+func _sync_status() -> String:
+	if scene_sync.last_agent_details.is_empty() or scene_sync.agent_busy:
+		return scene_sync.status_text()
+	return scene_sync.status_text() + (" (B or Y, then View AI output)" if xr_active else " (press O for the AI's reply)")
+
+
 func _update_status() -> void:
 	_refresh_empty_workspace_state()
 	if plan_on_open and not planner_opened and scene_sync.online:
@@ -1095,10 +1104,10 @@ func _update_status() -> void:
 	if xr_active:
 		var mode := "PLACE" if not placing_asset.is_empty() else ("MOVE" if not moving_id.is_empty() else "VIEW")
 		var sticks := "L walk / R look" if left_controller.get_is_active() else "R walk"
-		xr_status.text = "Worldsmith  •  %s  •  Selected: %s  •  %s\n%s %s  •  Hold A or stick click: sprint  •  Tap A/X: walk toggle  •  Menu: home" % [mode, selected_name, scene_sync.status_text(), sticks, "ON" if smooth_locomotion else "OFF"]
+		xr_status.text = "Worldsmith  •  %s  •  Selected: %s  •  %s\n%s %s  •  Hold A or stick click: sprint  •  Tap A/X: walk toggle  •  Menu: home" % [mode, selected_name, _sync_status(), sticks, "ON" if smooth_locomotion else "OFF"]
 	else:
 		var title := "EMPTY SCENE"
 		if not preview_name.is_empty():
 			title = scene_sync.scene_id if not scene_sync.scene_id.is_empty() else preview_name
 		var mode := "Placing " + placing_asset if not placing_asset.is_empty() else ("Moving " + selected_name if not moving_id.is_empty() else "Selected: " + selected_name)
-		status.text = "WORLDSMITH  •  %s  •  %s  •  %s\nH home  •  %s" % [title, mode, scene_sync.status_text(), "WASD move  •  Right mouse teleport" if view_only else "P prompt  •  Tab inventory  •  Left click select/place  •  G move  •  R rotate  •  +/- scale  •  Delete remove"]
+		status.text = "WORLDSMITH  •  %s  •  %s  •  %s\nH home  •  %s" % [title, mode, _sync_status(), "WASD move  •  Right mouse teleport" if view_only else "P prompt  •  O AI reply  •  Tab inventory  •  Left click select/place  •  G move  •  R rotate  •  +/- scale  •  Delete remove"]

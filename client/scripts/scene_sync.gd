@@ -581,9 +581,9 @@ func status_text() -> String:
 	if not last_error.is_empty():
 		return "Sync error: " + last_error
 	if not asset_request_id.is_empty():
-		return "Asset requested · open AI output for details"
+		return "Asset requested"
 	if brief_ready:
-		return "Scene plan saved · open AI output for details"
+		return "Scene plan saved"
 	if online:
 		return "Saved r%d" % revision if pending.is_empty() else "Syncing %d edit(s)" % pending.size()
 	return "Offline — %d edit(s) queued" % pending.size()
