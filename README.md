@@ -49,7 +49,7 @@ For a new object absent from the catalog, the scene command defaults to **Review
 
 In a connected scene, open the scene command from the inventory and choose **Plan this scene** to turn a broad prompt into a saved production brief. The result lists the walkable layout, ground treatment, lighting, and reusable asset families. It is stored as `brief.json` in that scene's project data and can be read with `GET /api/scenes/<id>/brief`. Planning does not insert geometry; the listed assets still need production and review.
 
-For preview collision and presentation settings, see [architecture.md](docs/architecture.md). The local versioned asset index and quality workflow are described in [asset-library.md](docs/asset-library.md) and [asset-quality.md](docs/asset-quality.md). The [Worldsmith scene skill](.agents/skills/worldsmith-scenes/SKILL.md) guides Codex when authoring different kinds of scenes. [Quest deployment](docs/quest-deployment.md) covers headset setup.
+For preview collision and presentation settings, see [architecture.md](docs/architecture.md). The local versioned asset index and quality workflow are described in [asset-library.md](docs/asset-library.md) and [asset-quality.md](docs/asset-quality.md). The [Worldsmith scene skill](.agents/skills/worldsmith-scenes/SKILL.md) guides Codex and Claude Code when authoring different kinds of scenes; `.claude/skills/worldsmith-scenes` is a symlink to the same copy. [Quest deployment](docs/quest-deployment.md) covers headset setup.
 
 ## Verification
 
