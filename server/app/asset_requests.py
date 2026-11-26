@@ -28,7 +28,7 @@ def create_asset_request(project: Path, scene_id: str, revision: int,
                          prompt: str, target: list[float]) -> dict:
     job = {
         "id": str(uuid4()), "kind": "asset_request", "status": "needs_asset",
-        "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "created": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
         "scene_id": scene_id, "revision": revision, "prompt": prompt,
         "target_position": target,
         "requirements": ["editable source or reproducible generation", "Godot visual review",
