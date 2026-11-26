@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import threading
 from copy import deepcopy
 from pathlib import Path
@@ -13,43 +12,52 @@ from uuid import uuid4
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from .assets import glb_material_names, list_assets, valid_scene_id
+from .assets import glb_material_names, valid_asset_paths, valid_scene_id
 from .history import history_status, replay, write_json
 from .scene import SceneDocument, SceneError, apply_operation
 
-REPO = Path(__file__).resolve().parents[2]
-
-
 class SceneStore:
-    def __init__(self, root: Path, seed: Path):
+    def __init__(self, root: Path, seed: Path | None = None, initial_scene_id: str | None = None):
         self.root = root
         self.seed = seed
         self.lock = threading.RLock()
         self.root.mkdir(parents=True, exist_ok=True)
-        if not (self.root / "demo" / "scene.json").exists():
-            shutil.copytree(self.seed, self.root / "demo", dirs_exist_ok=True)
-        # Existing local projects receive new catalog props without replacing user assets.
-        for asset in (self.seed / "assets").glob("*.glb"):
-            destination = self.root / "demo" / "assets" / asset.name
-            if not destination.exists():
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(asset, destination)
-        self._ensure_environment(self.root / "demo")
-
-    @staticmethod
-    def _ensure_environment(project: Path) -> None:
-        manifest = project / "environment.json"
-        if manifest.exists():
-            return
-        source = REPO / "client" / "assets" / "sample_hall.glb"
-        destination = project / "assets" / "environment.glb"
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if not destination.exists():
-            shutil.copy2(source, destination)
-        write_json(manifest, {"asset": "assets/environment.glb", "source": "sample_hall.glb"})
+        if initial_scene_id is not None:
+            valid_scene_id(initial_scene_id)
+            initial = self.root / initial_scene_id
+            if not (initial / "scene.json").exists():
+                if seed is None:
+                    self.create(initial_scene_id)
+                else:
+                    import shutil
+                    shutil.copytree(seed, initial, dirs_exist_ok=True)
+                    scene_path = initial / "scene.json"
+                    scene = SceneDocument.model_validate_json(scene_path.read_text()).model_dump()
+                    scene["scene_id"] = initial_scene_id
+                    write_json(scene_path, scene)
 
     def project(self, scene_id: str) -> Path:
         return self.root / valid_scene_id(scene_id)
+
+    def list_scenes(self) -> list[dict]:
+        entries = []
+        with self.lock:
+            for project in sorted(self.root.iterdir(), reverse=True):
+                if not project.is_dir() or not (project / "scene.json").is_file():
+                    continue
+                try:
+                    valid_scene_id(project.name)
+                    scene, _ = self._load(project.name)
+                except HTTPException:
+                    continue
+                entries.append({
+                    "scene_id": project.name,
+                    "revision": scene["revision"],
+                    "object_count": len(scene["objects"]),
+                    "has_environment": (project / "environment.json").is_file(),
+                    "has_brief": (project / "brief.json").is_file(),
+                })
+        return entries
 
     def create(self, scene_id: str) -> dict:
         project = self.project(scene_id)
@@ -58,11 +66,8 @@ class SceneStore:
                 raise HTTPException(409, "Scene already exists")
             project.mkdir(parents=True)
             (project / "assets").mkdir()
-            for asset in (self.seed / "assets").glob("*.glb"):
-                shutil.copy2(asset, project / "assets" / asset.name)
             scene = SceneDocument(scene_id=scene_id, revision=0).model_dump()
             write_json(project / "scene.json", scene)
-            self._ensure_environment(project)
             return scene
 
     def _load(self, scene_id: str) -> tuple[dict, dict]:
@@ -112,7 +117,7 @@ class SceneStore:
             self._check_revision(scene, expected_revision)
             before = {obj["id"]: obj for obj in scene["objects"]}
             objects = deepcopy(before)
-            assets = {item["path"] for item in list_assets(self.project(scene_id))}
+            assets = valid_asset_paths(self.project(scene_id))
             try:
                 for operation in operations:
                     names = None

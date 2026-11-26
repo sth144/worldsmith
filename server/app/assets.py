@@ -23,11 +23,32 @@ def list_assets(project: Path) -> list[dict[str, str]]:
     directory = project / "assets"
     if not directory.exists():
         return []
-    return [
-        {"id": path.name[:-4], "path": f"assets/{path.name}", "name": path.stem.title()}
-        for path in sorted(directory.iterdir())
-        if path.is_file() and ASSET_NAME.fullmatch(path.name)
-    ]
+    catalog_path = project / "catalog.json"
+    catalog = json.loads(catalog_path.read_text()) if catalog_path.is_file() else {}
+    allowed = catalog.get("assets", {}) if isinstance(catalog, dict) else {}
+    entries = []
+    for path in sorted(directory.iterdir()):
+        if not path.is_file() or not ASSET_NAME.fullmatch(path.name):
+            continue
+        asset_id = path.stem
+        if not isinstance(allowed, dict) or asset_id not in allowed:
+            continue
+        info = allowed[asset_id]
+        if not isinstance(info, dict):
+            continue
+        entries.append({"id": asset_id, "path": f"assets/{path.name}",
+                        "name": str(info.get("name", asset_id.replace("_", " ").replace("-", " ").title())),
+                        "walkable": bool(info.get("walkable", False))})
+    return entries
+
+
+def valid_asset_paths(project: Path) -> set[str]:
+    """All stored assets eligible for saved placements, including generated assets."""
+    directory = project / "assets"
+    if not directory.is_dir():
+        return set()
+    return {f"assets/{path.name}" for path in directory.iterdir()
+            if path.is_file() and ASSET_NAME.fullmatch(path.name)}
 
 
 def asset_path(project: Path, asset_id: str) -> Path:

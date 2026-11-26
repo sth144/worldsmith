@@ -35,7 +35,7 @@ def test_approved_mesh_edit_undo_and_portable_export(tmp_path):
     assert approval.status_code == 200, approval.text
     modified = approval.json()["changes"][0]["object"]["asset"]
     assert modified.startswith("assets/chair-v-")
-    assert client.get("/api/assets/chair").content[:4] == b"glTF"
+    assert client.get("/api/assets/chair", params={"scene_id": "demo"}).content[:4] == b"glTF"
     assert modified in {item["path"] for item in client.get("/api/scenes/demo/manifest").json()["sources"]}
     undo = client.post("/api/scenes/demo/undo", json={"expected_revision": 2})
     assert undo.json()["changes"][0]["object"]["asset"] == "assets/chair.glb"

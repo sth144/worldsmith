@@ -1,7 +1,7 @@
 """Export the open Blender scene as a Godot-friendly local preview.
 
-Plain glTF export does not preserve this scene's procedural materials or grass
-instances in Godot. This bakes base colors and writes repeated mesh instances
+Plain glTF export does not preserve every procedural material or repeated
+instance in Godot. This bakes base colors and writes repeated mesh instances
 separately for Godot MultiMesh. The source .blend is never saved.
 
 Use: blender --background source.blend --python scripts/export_preview.py -- output.glb
@@ -17,13 +17,17 @@ import bpy
 from mathutils import Matrix
 
 
-def procedural_base_color(material):
-    if material is None or not material.use_nodes:
-        return None
-    for node in material.node_tree.nodes:
-        if node.type == "BSDF_PRINCIPLED" and node.inputs["Base Color"].is_linked:
-            return node
-    return None
+def needs_bake(shader, channel):
+    socket = shader.inputs[channel]
+    if not socket.is_linked:
+        return False
+    source = socket.links[0].from_node
+    if channel in ("Base Color", "Roughness"):
+        return source.type != "TEX_IMAGE"
+    if channel == "Normal" and source.type == "NORMAL_MAP":
+        color = source.inputs["Color"]
+        return not color.is_linked or color.links[0].from_node.type != "TEX_IMAGE"
+    return True
 
 
 def collect_instances():
@@ -51,7 +55,7 @@ def ensure_uv(object_):
     bpy.ops.object.mode_set(mode="OBJECT")
 
 
-def bake_color(object_, slot_index):
+def bake_material(object_, slot_index):
     # Each object gets its own UVs and material because procedural coordinates
     # may differ even when multiple objects share one Blender material.
     object_.data = object_.data.copy()
@@ -60,32 +64,53 @@ def bake_color(object_, slot_index):
     material = slot.material.copy()
     slot.link = "DATA"
     slot.material = material
-    shader = procedural_base_color(material)
+    shader = next((node for node in material.node_tree.nodes if node.type == "BSDF_PRINCIPLED"), None)
     if shader is None:
         return
     nodes = material.node_tree.nodes
     links = material.node_tree.links
     output = next(node for node in nodes if node.type == "OUTPUT_MATERIAL")
     source_surface = output.inputs["Surface"].links[0].from_socket
-    source_color = shader.inputs["Base Color"].links[0].from_socket
     polygons = len(object_.data.polygons)
     size = 2048 if polygons > 10000 else 1024 if polygons > 100 else 512
-    image = bpy.data.images.new(f"{object_.name} color", width=size, height=size, alpha=False)
-    image_node = nodes.new("ShaderNodeTexImage")
-    image_node.image = image
-    nodes.active = image_node
-    emission = nodes.new("ShaderNodeEmission")
-    links.new(source_color, emission.inputs["Color"])
-    links.new(emission.outputs[0], output.inputs["Surface"])
     bpy.ops.object.select_all(action="DESELECT")
     object_.select_set(True)
     bpy.context.view_layer.objects.active = object_
-    bpy.ops.object.bake(type="EMIT", margin=2)
-    links.new(source_surface, output.inputs["Surface"])
-    links.new(image_node.outputs["Color"], shader.inputs["Base Color"])
-    nodes.remove(emission)
-    image.pack()
-    print(f"WORLDSMITH baked {object_.name} at {size}px")
+    for channel in ("Base Color", "Roughness"):
+        socket = shader.inputs[channel]
+        if not needs_bake(shader, channel):
+            continue
+        original = socket.links[0].from_socket
+        image = bpy.data.images.new(f"{object_.name} {channel}", width=size, height=size, alpha=False)
+        image_node = nodes.new("ShaderNodeTexImage")
+        image_node.image = image
+        nodes.active = image_node
+        emission = nodes.new("ShaderNodeEmission")
+        links.new(original, emission.inputs["Color"])
+        links.new(emission.outputs[0], output.inputs["Surface"])
+        try:
+            bpy.ops.object.bake(type="EMIT", margin=2)
+        finally:
+            links.new(source_surface, output.inputs["Surface"])
+            nodes.remove(emission)
+        if channel == "Roughness":
+            image.colorspace_settings.name = "Non-Color"
+        links.new(image_node.outputs["Color"], socket)
+        image.pack()
+        print(f"WORLDSMITH baked {object_.name} {channel} at {size}px")
+    normal_socket = shader.inputs["Normal"]
+    if needs_bake(shader, "Normal"):
+        image = bpy.data.images.new(f"{object_.name} Normal", width=size, height=size, alpha=False)
+        image_node = nodes.new("ShaderNodeTexImage")
+        image_node.image = image
+        nodes.active = image_node
+        bpy.ops.object.bake(type="NORMAL", normal_space="TANGENT", margin=2)
+        image.colorspace_settings.name = "Non-Color"
+        normal_map = nodes.new("ShaderNodeNormalMap")
+        links.new(image_node.outputs["Color"], normal_map.inputs["Color"])
+        links.new(normal_map.outputs["Normal"], normal_socket)
+        image.pack()
+        print(f"WORLDSMITH baked {object_.name} Normal at {size}px")
 
 
 def export_instances(output, groups):
@@ -147,10 +172,12 @@ def main():
         if object_.type != "MESH" or object_.hide_render:
             continue
         for index, slot in enumerate(object_.material_slots):
-            if procedural_base_color(slot.material):
-                bake_targets.append((object_, index))
+            if slot.material and slot.material.use_nodes:
+                shader = next((node for node in slot.material.node_tree.nodes if node.type == "BSDF_PRINCIPLED"), None)
+                if shader and any(needs_bake(shader, name) for name in ("Base Color", "Roughness", "Normal")):
+                    bake_targets.append((object_, index))
     for object_, index in bake_targets:
-        bake_color(object_, index)
+        bake_material(object_, index)
     bpy.ops.export_scene.gltf(
         filepath=str(output),
         export_format="GLB",

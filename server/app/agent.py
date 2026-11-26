@@ -22,25 +22,33 @@ COLORS = {
     "white": [1, 1, 1, 1], "black": [0.025, 0.025, 0.025, 1],
 }
 
-PLACEABLE = {"chair": "Chair", "table": "Table", "planter": "Planter", "lantern": "Lantern",
-             "hill": "Hill", "tree": "Tree"}
+def mentions_asset(words: str, key: str) -> bool:
+    return bool(re.search(r"\b" + re.escape(key.lower()) + r"s?\b", words))
 
 
-def is_placement_request(prompt: str) -> bool:
+def matching_assets(prompt: str, catalog: list[dict]) -> list[dict]:
     words = prompt.lower()
-    named_asset = any(re.search(r"\b" + key + r"s?\b", words) for key in PLACEABLE)
-    return bool(named_asset and (re.search(r"\b(add|put|place|plant|build|create|spawn)\b", words)
-                                 or "hill" in words and "tree" in words))
+    return [item for item in catalog if mentions_asset(words, item["name"].lower())
+            or mentions_asset(words, item["id"].replace("-", " ").replace("_", " "))]
+
+
+def is_creation_request(prompt: str) -> bool:
+    return bool(re.search(r"\b(add|put|place|plant|build|create|spawn)\b", prompt.lower()))
+
+
+def is_placement_request(prompt: str, catalog: list[dict]) -> bool:
+    words = prompt.lower()
+    return bool(matching_assets(words, catalog) and is_creation_request(prompt))
 
 
 def resolve_aimed_target(prompt: str, aimed_id: str | None, view: dict | None,
-                         scene: dict) -> tuple[str | None, str]:
+                         scene: dict, catalog: list[dict] | None = None) -> tuple[str | None, str]:
     """Resolve a described, visible prop before falling back to the aimed prop."""
     objects = {obj["id"]: obj for obj in scene["objects"]}
     if aimed_id is not None and aimed_id not in objects:
-        raise HTTPException(422, "Aimed object no longer exists; reopen Ask AI")
+        raise HTTPException(422, "Aimed object no longer exists; reopen AI command")
     words = prompt.lower()
-    named_assets = [key for key in PLACEABLE if re.search(r"\b" + key + r"s?\b", words)]
+    named_assets = {item["path"] for item in matching_assets(words, catalog or [])}
     describes_existing = bool(re.search(r"\b(delete|remove|discard|hide|duplicate|copy|move|rotate|scale)\b|get rid", words))
     named_colors = ([name for name in COLORS if re.search(r"\b" + name + r"\b", words)]
                     if describes_existing else [])
@@ -48,7 +56,7 @@ def resolve_aimed_target(prompt: str, aimed_id: str | None, view: dict | None,
         return aimed_id, "aimed" if aimed_id else "none"
 
     def matches(obj: dict) -> bool:
-        if named_assets and obj["asset"].removeprefix("assets/").removesuffix(".glb").split("-v-")[0] not in named_assets:
+        if named_assets and obj["asset"] not in named_assets:
             return False
         if not named_colors:
             return True
@@ -92,24 +100,31 @@ def _in_view(obj: dict, camera: list[float], direction: list[float]) -> bool:
     return 0.1 < distance <= 30 and sum(a * b for a, b in zip(offset, direction)) / distance > 0.3
 
 
-def placement(asset_key: str, position: list[float], name: str | None = None,
+def placement(asset: dict, position: list[float], name: str | None = None,
               scale: list[float] | None = None) -> dict:
     return {"type": "add_object", "object": {
-        "id": str(uuid4()), "name": name or PLACEABLE[asset_key], "asset": f"assets/{asset_key}.glb",
+        "id": str(uuid4()), "name": name or asset["name"],
+        "asset": asset["path"],
         "parent_id": None, "position": position, "rotation": [0, 0, 0, 1],
         "scale": scale or [1, 1, 1], "visible": True, "locked": False, "metadata": {},
     }}
 
 
-def deterministic_view_plan(prompt: str, target: list[float]) -> list[dict] | None:
+def generated_placement(asset: str, position: list[float], name: str) -> dict:
+    return {"type": "add_object", "object": {
+        "id": str(uuid4()), "name": name, "asset": asset, "parent_id": None,
+        "position": position, "rotation": [0, 0, 0, 1], "scale": [1, 1, 1],
+        "visible": True, "locked": False, "metadata": {},
+    }}
+
+
+def deterministic_view_plan(prompt: str, target: list[float], catalog: list[dict]) -> list[dict] | None:
     words = prompt.lower()
-    if re.search(r"\bhill\b", words) and re.search(r"\btree\b", words):
-        return [placement("hill", target), placement("tree", [target[0], target[1] + 1.12, target[2]])]
-    if not re.search(r"\b(add|put|place|plant|create)\b", words):
+    if not is_creation_request(prompt) or re.search(r"\b(row|line|several|multiple)\b", words):
         return None
-    for key in PLACEABLE:
-        if re.search(r"\b" + key + r"s?\b", words):
-            return [placement(key, target)]
+    matches = matching_assets(words, catalog)
+    if len(matches) == 1:
+        return [placement(matches[0], target)]
     return None
 
 
@@ -118,12 +133,29 @@ def _operation_schema(properties: dict) -> dict:
             "properties": properties, "required": list(properties)}
 
 
-VIEW_SCHEMA = {
-    "type": "object", "additionalProperties": False, "required": ["placements"],
-    "properties": {"placements": {"type": "array", "items": _operation_schema({
-        "asset_key": {"type": "string", "enum": list(PLACEABLE)}, "name": {"type": "string"},
-        "position": {"type": "array", "items": {"type": "number"}},
-        "scale": {"type": "array", "items": {"type": "number"}},
+def view_schema(catalog: list[dict]) -> dict:
+    return {"type": "object", "additionalProperties": False, "required": ["placements"],
+            "properties": {"placements": {"type": "array", "items": _operation_schema({
+                "asset_key": {"type": "string", "enum": [item["id"] for item in catalog]},
+                "name": {"type": "string"},
+                "position": {"type": "array", "items": {"type": "number"}},
+                "scale": {"type": "array", "items": {"type": "number"}},
+            })}}}
+
+
+CREATIVE_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["objects"],
+    "properties": {"objects": {"type": "array", "items": _operation_schema({
+        "name": {"type": "string"},
+        "offset": {"type": "array", "items": {"type": "number"}},
+        "parts": {"type": "array", "items": _operation_schema({
+            "name": {"type": "string"},
+            "shape": {"type": "string", "enum": ["box", "ellipsoid", "cylinder", "cone"]},
+            "center": {"type": "array", "items": {"type": "number"}},
+            "size": {"type": "array", "items": {"type": "number"}},
+            "yaw": {"type": "number"},
+            "color": {"type": "array", "items": {"type": "number"}},
+        })},
     })}},
 }
 
@@ -197,6 +229,14 @@ def deterministic_plan(prompt: str, selected: list[dict]) -> list[dict] | None:
 
 
 async def codex_plan(prompt: str, selected: list[dict], scene: dict) -> list[dict]:
+    return await _object_plan(prompt, selected, scene, "codex")
+
+
+async def claude_plan(prompt: str, selected: list[dict], scene: dict) -> list[dict]:
+    return await _object_plan(prompt, selected, scene, "claude")
+
+
+async def _object_plan(prompt: str, selected: list[dict], scene: dict, provider: str) -> list[dict]:
     guidance = (
         "You are a scene operation planner. Return JSON with only an operations array. "
         "Allowed types: set_transform (object_id plus all position/rotation/scale arrays), "
@@ -210,35 +250,102 @@ async def codex_plan(prompt: str, selected: list[dict], scene: dict) -> list[dic
         "If the request cannot be expressed with these operations, return an empty array.\n"
         + json.dumps({"request": prompt, "selected": selected, "scene": scene}, separators=(",", ":"))
     )
-    result = await _codex_json(guidance, SCHEMA)
+    result = await _agent_json(provider, guidance, SCHEMA)
     if "operations" not in result:
-        raise HTTPException(502, "Codex returned invalid operations")
+        raise HTTPException(502, f"{provider.title()} returned invalid operations")
     return result["operations"]
 
 
-async def codex_view_plan(prompt: str, view: dict, scene: dict) -> list[dict]:
+async def codex_view_plan(prompt: str, view: dict, scene: dict, catalog: list[dict]) -> list[dict]:
+    return await _view_plan(prompt, view, scene, catalog, "codex")
+
+
+async def claude_view_plan(prompt: str, view: dict, scene: dict, catalog: list[dict]) -> list[dict]:
+    return await _view_plan(prompt, view, scene, catalog, "claude")
+
+
+async def _view_plan(prompt: str, view: dict, scene: dict, catalog: list[dict], provider: str) -> list[dict]:
     guidance = (
         "Plan placements in a 3D scene. Return JSON with only a placements array. "
         "Use only the catalog asset keys. Coordinates are meters and Y up. "
         "The target is where the user is looking on the floor. Place requested objects near it; "
-        "put a tree on a hill at hill center plus 1.12 meters Y. "
         "Do not alter existing objects or the base environment. If available assets cannot "
         "express the request, return an empty array. Use scale [1,1,1] by default. "
         "Never write files or execute code.\n" + json.dumps({
-            "request": prompt, "view": view, "catalog": PLACEABLE,
+            "request": prompt, "view": view, "catalog": catalog,
             "nearby_objects": [obj for obj in scene["objects"] if math.dist(
                 obj["position"], view["target_position"]) < 10],
         }, separators=(",", ":"))
     )
-    result = await _codex_json(guidance, VIEW_SCHEMA)
+    result = await _agent_json(provider, guidance, view_schema(catalog))
     proposals = result.get("placements")
     if not isinstance(proposals, list):
-        raise HTTPException(502, "Codex returned invalid placements")
+        raise HTTPException(502, f"{provider.title()} returned invalid placements")
     try:
-        return [placement(item["asset_key"], item["position"], item["name"], item["scale"])
+        by_id = {asset["id"]: asset for asset in catalog}
+        return [placement(by_id[item["asset_key"]], item["position"], item["name"], item["scale"])
                 for item in proposals]
     except (KeyError, TypeError) as exc:
-        raise HTTPException(502, "Codex returned invalid placements") from exc
+        raise HTTPException(502, f"{provider.title()} returned invalid placements") from exc
+
+
+async def creative_view_plan(prompt: str, view: dict, scene: dict, provider: str) -> list[dict]:
+    guidance = (
+        "You design simple, recognizable low-poly 3D props for a VR world. Return JSON with an objects array. "
+        "Each object has a short name, an offset [x,y,z] in meters from the viewed target, and parts. "
+        "Each part has a name, shape (box, ellipsoid, cylinder, cone), center [x,y,z] relative to its "
+        "object's floor origin, size [width,height,depth] in meters, yaw in degrees around Y, and RGB "
+        "color [0..1]. Y is up, -Z points forward. Build a clear silhouette with several parts, sensible "
+        "materials/colors, and a stable base touching y=0. Use no more than three objects and 32 parts "
+        "per object. You may invent forms beyond the existing catalog. If the request cannot be "
+        "represented as new 3D props, return an empty objects array. Do not write code or files.\n"
+        + json.dumps({"request": prompt, "view": view,
+                      "nearby_objects": [obj for obj in scene["objects"] if math.dist(
+                          obj["position"], view["target_position"]) < 10]}, separators=(",", ":"))
+    )
+    result = await _agent_json(provider, guidance, CREATIVE_SCHEMA)
+    if not isinstance(result.get("objects"), list):
+        raise HTTPException(502, f"{provider.title()} returned invalid geometry")
+    return result["objects"]
+
+
+async def _agent_json(provider: str, guidance: str, schema: dict) -> dict:
+    if provider == "claude":
+        return await _claude_json(guidance, schema)
+    return await _codex_json(guidance, schema)
+
+
+async def _claude_json(guidance: str, schema: dict) -> dict:
+    if shutil.which("claude") is None:
+        raise HTTPException(503, "Claude Code CLI is unavailable on the scene server")
+    # Claude has no scene files to inspect. Disable all built-in and MCP tools;
+    # only its structured proposal is used by the shared scene validator.
+    with tempfile.TemporaryDirectory(prefix="worldsmith-agent-") as directory:
+        process = await asyncio.create_subprocess_exec(
+            "claude", "--safe-mode", "--print", "--output-format", "json",
+            "--json-schema", json.dumps(schema), "--tools", "",
+            "--disallowedTools", "mcp__*", "--no-session-persistence",
+            cwd=directory, stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(guidance.encode()), timeout=90)
+        except TimeoutError as exc:
+            process.kill()
+            await process.communicate()
+            raise HTTPException(504, "AI command timed out") from exc
+        if process.returncode != 0:
+            raise HTTPException(502, "Claude could not plan this edit: " + stderr.decode(errors="replace")[-300:])
+        try:
+            envelope = json.loads(stdout)
+            if envelope.get("is_error"):
+                raise HTTPException(502, "Claude could not plan this edit: " + str(envelope.get("result", "unknown error"))[-300:])
+            result = envelope["structured_output"]
+            if not isinstance(result, dict):
+                raise TypeError("Expected a JSON object")
+            return result
+        except (ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(502, "Claude returned invalid structured output") from exc
 
 
 async def _codex_json(guidance: str, schema: dict) -> dict:
@@ -259,7 +366,7 @@ async def _codex_json(guidance: str, schema: dict) -> dict:
         except TimeoutError as exc:
             process.kill()
             await process.communicate()
-            raise HTTPException(504, "AI request timed out") from exc
+            raise HTTPException(504, "AI command timed out") from exc
         if process.returncode != 0 or not answer_path.is_file():
             raise HTTPException(502, "Codex could not plan this edit: " + stderr.decode(errors="replace")[-300:])
         try:
@@ -272,9 +379,9 @@ async def _codex_json(guidance: str, schema: dict) -> dict:
 
 
 def validate_proposal(operations: list[dict], scene: dict, selected_ids: list[str], assets: set[str],
-                      target: list[float] | None = None) -> None:
+                      target: list[float] | None = None, generated_assets: set[str] | None = None) -> None:
     if not isinstance(operations, list) or not 1 <= len(operations) <= 16:
-        raise HTTPException(422, "AI request produced no supported edit")
+        raise HTTPException(422, "Command produced no supported edit")
     editable = set(selected_ids)
     working = {obj["id"]: obj.copy() for obj in scene["objects"]}
     try:
@@ -283,8 +390,8 @@ def validate_proposal(operations: list[dict], scene: dict, selected_ids: list[st
                 obj = operation.get("object", {})
                 if not isinstance(obj, dict):
                     raise SceneError("Placement object is invalid")
-                if obj.get("asset") not in {f"assets/{key}.glb" for key in PLACEABLE}:
-                    raise SceneError("Agent may place catalog assets only")
+                if obj.get("asset") not in (assets | (generated_assets or set())):
+                    raise SceneError("Agent may place catalog or validated generated assets only")
                 position = obj.get("position")
                 if (not isinstance(position, list) or len(position) != 3 or
                     math.dist(position, target) > 5):

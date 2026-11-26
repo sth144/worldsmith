@@ -2,8 +2,8 @@
 # Export a Blender file to an ignored local GLB, import it in Godot, and preview it.
 set -euo pipefail
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
-    echo "Usage: $0 path/to/scene.blend [godot_spawn_x,y,z]" >&2
+if [[ $# -lt 1 || $# -gt 3 ]]; then
+    echo "Usage: $0 path/to/scene.blend [godot_spawn_x,y,z] [preview_settings.json]" >&2
     exit 2
 fi
 if ! command -v blender >/dev/null 2>&1; then
@@ -18,6 +18,7 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 blend_file="$1"
 spawn="${2:-0,0,0}"
+settings="${3:-}"
 if [[ ! -f "$blend_file" ]]; then
     echo "Blender file not found: $blend_file" >&2
     exit 1
@@ -43,17 +44,21 @@ if ! "${repo_root}/scripts/godot.sh" --headless --xr-mode off --editor --path "$
     exit 1
 fi
 
-python3 - "$name" "$spawn" "${local_dir}/preview.json" <<'PY'
+python3 - "$name" "$spawn" "${local_dir}/${name}.preview.json" "$settings" <<'PY'
 import json
 from pathlib import Path
 import sys
 
-name, spawn_text, config_path = sys.argv[1:]
+name, spawn_text, config_path, settings_path = sys.argv[1:]
 spawn = [float(value) for value in spawn_text.split(",")]
 if len(spawn) != 3:
     raise SystemExit("Spawn must contain X,Y,Z values")
-Path(config_path).write_text(json.dumps({"glb": f"res://assets/local/{name}.glb", "spawn": spawn}) + "\n")
+settings = json.loads(Path(settings_path).read_text()) if settings_path else {}
+if not isinstance(settings, dict):
+    raise SystemExit("Preview settings must be a JSON object")
+settings.update({"glb": f"res://assets/local/{name}.glb", "spawn": spawn})
+Path(config_path).write_text(json.dumps(settings, indent=2) + "\n")
 PY
 
 echo "Starting preview at ${spawn} (Godot X,Y,Z)..."
-exec "${repo_root}/scripts/godot.sh" --xr-mode off --path "${repo_root}/client"
+exec "${repo_root}/scripts/godot.sh" --xr-mode off --path "${repo_root}/client" -- "--preview-config=res://assets/local/${name}.preview.json"

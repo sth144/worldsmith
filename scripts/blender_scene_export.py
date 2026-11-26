@@ -75,11 +75,10 @@ def import_asset(relative, transform=None, metadata=None):
 
 
 environment_objects = import_asset(config["environment"]["asset"])
-if config["environment"].get("source") == "merchant.glb":
-    for obj in environment_objects:
-        name = obj.name.lower()
-        if name.startswith(("gate doors", "gate ironwork", "gate straps")):
-            bpy.data.objects.remove(obj, do_unlink=True)
+hidden_names = [str(name).lower() for name in config["environment"].get("hidden_meshes", [])]
+for obj in environment_objects:
+    if any(name in obj.name.lower() for name in hidden_names):
+        bpy.data.objects.remove(obj, do_unlink=True)
 for group_index, group in enumerate(config["environment"].get("instances", [])):
     imported = import_asset(group["glb"])
     prototypes = [obj for obj in imported if obj.type == "MESH"]

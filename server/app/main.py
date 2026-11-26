@@ -4,28 +4,46 @@ from __future__ import annotations
 
 import os
 import asyncio
+import json
+import re
+import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from .assets import asset_path, glb_material_names, list_assets
-from .agent import codex_plan, codex_view_plan, deterministic_plan, deterministic_view_plan, is_placement_request, resolve_aimed_target, validate_proposal
-from .export import export_scene, source_manifest
+from .assets import asset_path, glb_material_names, list_assets, valid_asset_paths, validate_glb, valid_scene_id
+from .asset_requests import AssetLibrary, copy_version_to_project, create_asset_request, current_mesh, read_asset_request
+from .agent import claude_plan, claude_view_plan, codex_plan, codex_view_plan, creative_view_plan, deterministic_plan, deterministic_view_plan, generated_placement, is_creation_request, is_placement_request, resolve_aimed_target, validate_proposal
+from .export import export_scene, register_environment, scene_instance_path, scene_package, source_manifest
 from .geometry import create_proposal, interpret_geometry, read_job, run_geometry
+from .procedural import build_assets, validate_designs
 from .history import write_json
 from .history import history_status
 from .storage import SceneStore
 from .scene import SceneError, vector
+from .scene_brief import plan_scene_brief, read_scene_brief, save_scene_brief
 from .websocket import Connections
+from .voice import MAX_WAV_BYTES, transcribe
 
 REPO = Path(__file__).resolve().parents[2]
 
 
 class CreateScene(BaseModel):
     scene_id: str
+
+
+class BriefRequest(BaseModel):
+    expected_revision: int = Field(ge=0)
+    prompt: str = Field(min_length=20, max_length=2000)
+    provider: Literal["codex", "claude"] = "codex"
+
+
+class LibraryRequest(BaseModel):
+    prompt: str = Field(min_length=10, max_length=1000)
 
 
 class OperationBatch(BaseModel):
@@ -40,9 +58,17 @@ class RevisionRequest(BaseModel):
 class AgentRequest(BaseModel):
     expected_revision: int = Field(ge=0)
     prompt: str = Field(min_length=3, max_length=1000)
+    provider: Literal["codex", "claude"] = "codex"
+    creation_mode: Literal["draft", "reviewed"] = "draft"
     selected_object_ids: list[str] = Field(default_factory=list, max_length=16)
     aimed_object_id: str | None = None
     view: dict[str, Any] | None = None
+
+
+class FulfillAssetRequest(BaseModel):
+    expected_revision: int = Field(ge=0)
+    asset_id: str = Field(min_length=1, max_length=64)
+    name: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 def validate_view(view: dict[str, Any] | None) -> dict:
@@ -67,18 +93,152 @@ def validate_view(view: dict[str, Any] | None) -> dict:
 
 def create_app(data_dir: Path | None = None) -> FastAPI:
     root = data_dir or Path(os.environ.get("WORLDSMITH_DATA_DIR", REPO / "data")) / "projects"
-    store = SceneStore(root, REPO / "projects" / "demo")
+    seed_setting = os.environ.get("WORLDSMITH_SCENE_SEED")
+    store = SceneStore(root, Path(seed_setting) if seed_setting else None,
+                       os.environ.get("WORLDSMITH_INITIAL_SCENE_ID"))
     connections = Connections()
     app = FastAPI(title="Worldsmith Scene Server", version="0.7.1")
     app.state.store = store
+    library_root = root.parent / "library"
+
+    async def receive_glb(request: Request) -> Path:
+        uploads = root.parent / "uploads"
+        uploads.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=uploads, suffix=".glb", delete=False) as temporary:
+            path = Path(temporary.name)
+            size = 0
+            try:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > 256 * 1024 * 1024:
+                        raise HTTPException(413, "GLB exceeds 256 MB")
+                    temporary.write(chunk)
+            except BaseException:
+                path.unlink(missing_ok=True)
+                raise
+        try:
+            validate_glb(path)
+        except ValueError as exc:
+            path.unlink(missing_ok=True)
+            raise HTTPException(422, "File is not a valid mesh GLB") from exc
+        return path
+
+    @app.post("/api/transcribe")
+    async def transcribe_command(request: Request) -> dict:
+        if request.headers.get("content-type", "").split(";")[0] != "audio/wav":
+            raise HTTPException(415, "Send audio/wav")
+        chunks = []
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > MAX_WAV_BYTES:
+                raise HTTPException(413, "Recording is too large")
+            chunks.append(chunk)
+        return {"text": await asyncio.to_thread(transcribe, b"".join(chunks))}
+
+    @app.get("/api/scenes")
+    def list_scenes() -> list[dict]:
+        return store.list_scenes()
 
     @app.get("/api/scenes/{scene_id}")
     def get_scene(scene_id: str) -> dict:
         return store.read(scene_id)[0]
 
+    @app.get("/api/scenes/{scene_id}/package")
+    def get_scene_package(scene_id: str) -> dict:
+        store.read(scene_id)
+        return {"scene_id": scene_id, **scene_package(store.project(scene_id))}
+
+    @app.get("/api/scenes/{scene_id}/package/instances/{index}/{kind}")
+    def get_scene_instance(scene_id: str, index: int, kind: str) -> FileResponse:
+        store.read(scene_id)
+        path = scene_instance_path(store.project(scene_id), index, kind)
+        return FileResponse(path, media_type="model/gltf-binary" if kind == "prototype" else "application/octet-stream")
+
     @app.post("/api/scenes", status_code=201)
     def create_scene(body: CreateScene) -> dict:
         return store.create(body.scene_id)
+
+    @app.post("/api/scenes/{scene_id}/environment")
+    async def import_scene_environment(scene_id: str, request: Request) -> dict:
+        store.read(scene_id)
+        project = store.project(scene_id)
+        if (project / "environment.json").exists():
+            raise HTTPException(409, "Scene already has an environment")
+        path = await receive_glb(request)
+        try:
+            return register_environment(project, path)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        finally:
+            path.unlink(missing_ok=True)
+
+    @app.get("/api/library/assets")
+    def list_library_assets() -> list[dict]:
+        library = AssetLibrary(library_root)
+        try:
+            return [{key: item[key] for key in ("asset_id", "sha256", "kind", "origin", "metadata")}
+                    for item in library.list()]
+        finally:
+            library.database.close()
+
+    @app.post("/api/library/assets/{asset_id}", status_code=201)
+    async def import_library_asset(asset_id: str, request: Request) -> dict:
+        valid_scene_id(asset_id)
+        path = await receive_glb(request)
+        library = AssetLibrary(library_root)
+        try:
+            item = library.register(asset_id, path, "mesh", "imported", "unverified",
+                                    metadata={"godot_review": False, "source_filename": request.headers.get("x-filename", "")})
+            return {key: item[key] for key in ("asset_id", "sha256", "kind", "origin", "metadata")}
+        finally:
+            library.database.close()
+            path.unlink(missing_ok=True)
+
+    @app.get("/api/library/assets/{asset_id}/glb")
+    def download_library_asset(asset_id: str) -> FileResponse:
+        valid_scene_id(asset_id)
+        library = AssetLibrary(library_root)
+        try:
+            try:
+                item = library.get(asset_id)
+            except KeyError as exc:
+                raise HTTPException(404, "Asset not found") from exc
+            return FileResponse(item["blob"], media_type="model/gltf-binary",
+                                filename=f"{asset_id}.glb")
+        finally:
+            library.database.close()
+
+    @app.get("/api/library/requests")
+    def list_library_requests() -> list[dict]:
+        directory = library_root / "requests"
+        if not directory.is_dir():
+            return []
+        return [json.loads(path.read_text()) for path in sorted(directory.glob("*.json"), reverse=True)]
+
+    @app.post("/api/library/requests", status_code=201)
+    def request_library_asset(body: LibraryRequest) -> dict:
+        job = {"id": str(uuid4()), "prompt": body.prompt.strip(), "status": "needs_production"}
+        write_json(library_root / "requests" / f"{job['id']}.json", job)
+        return job
+
+    @app.get("/api/scenes/{scene_id}/brief")
+    def get_scene_brief(scene_id: str) -> dict:
+        store.read(scene_id)
+        return read_scene_brief(store.project(scene_id))
+
+    @app.post("/api/scenes/{scene_id}/brief")
+    async def create_scene_brief(scene_id: str, body: BriefRequest) -> dict:
+        scene, _ = store.read(scene_id)
+        if scene["revision"] != body.expected_revision:
+            raise HTTPException(409, "Scene changed since this brief was requested")
+        brief = await plan_scene_brief(body.prompt, body.provider)
+        with store.lock:
+            current, _ = store.read(scene_id)
+            if current["revision"] != body.expected_revision:
+                raise HTTPException(409, "Scene changed while planning the brief")
+            return save_scene_brief(store.project(scene_id), scene_id,
+                                    current["revision"], body.prompt, body.provider, brief)
 
     @app.post("/api/scenes/{scene_id}/operations")
     async def apply_operations(scene_id: str, body: OperationBatch) -> dict:
@@ -97,29 +257,51 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         ):
             raise HTTPException(422, "Select existing objects")
         context_view = validate_view(body.view) if body.view is not None else None
-        if is_placement_request(body.prompt) and context_view is None:
+        creation = is_creation_request(body.prompt)
+        if creation and context_view is None:
             raise HTTPException(422, "Look at a floor point to place objects")
-        place_in_view = context_view is not None and is_placement_request(body.prompt)
+        place_in_view = context_view is not None and (creation or
+                        not body.selected_object_ids and (body.aimed_object_id is None or
+                        re.search(r"\b(here|there|over here|over there)\b", body.prompt.lower())))
+        catalog = list_assets(store.project(scene_id))
+        known_catalog_request = is_placement_request(body.prompt, catalog)
         view = context_view if place_in_view else None
+        if view is not None and creation and not known_catalog_request and body.creation_mode == "reviewed":
+            job = create_asset_request(store.project(scene_id), scene_id, scene["revision"],
+                                       body.prompt, view["target_position"])
+            return {"status": "needs_asset", "job": job,
+                    "message": "A reviewed mesh is needed. Generate or author it, promote it in the library, then fulfill this request."}
         target_ids = list(body.selected_object_ids)
         target_source = "view" if place_in_view else ("selected" if target_ids else "none")
         if not place_in_view and not target_ids:
             resolved_id, target_source = resolve_aimed_target(body.prompt, body.aimed_object_id,
-                                                               context_view, scene)
+                                                               context_view, scene, catalog)
             if resolved_id is None:
-                raise HTTPException(422, "Aim at a placed object or describe a catalog object to add")
+                raise HTTPException(422, "Aim at a placed object or look at a floor point for a new object")
             target_ids = [resolved_id]
         selected = []
         for object_id in target_ids:
             obj = by_id[object_id].copy()
             obj["available_materials"] = sorted(glb_material_names(store.project(scene_id) / obj["asset"]))
             selected.append(obj)
-        operations = (deterministic_view_plan(body.prompt, view["target_position"]) if view is not None
+        operations = (deterministic_view_plan(body.prompt, view["target_position"], catalog) if view is not None and known_catalog_request
                       else deterministic_plan(body.prompt, selected))
-        planner = "local" if operations is not None else "codex"
+        generated_assets: set[str] = set()
+        generated_designs: list[dict] = []
+        planner = "local" if operations is not None else body.provider
         if operations is None:
             if view is not None:
-                operations = await codex_view_plan(body.prompt, view, scene)
+                if known_catalog_request:
+                    operations = await (claude_view_plan(body.prompt, view, scene, catalog) if body.provider == "claude"
+                                        else codex_view_plan(body.prompt, view, scene, catalog))
+                else:
+                    designs = validate_designs(await creative_view_plan(body.prompt, view, scene, body.provider))
+                    generated_designs = designs
+                    paths = await asyncio.to_thread(build_assets, store.project(scene_id), designs)
+                    generated_assets = set(paths)
+                    target = view["target_position"]
+                    operations = [generated_placement(path, [target[i] + design["offset"][i] for i in range(3)], design["name"])
+                                  for path, design in zip(paths, designs)]
             else:
                 geometry_spec = interpret_geometry(body.prompt)
                 if geometry_spec is not None:
@@ -127,13 +309,70 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                         raise HTTPException(422, "Select one object for a geometry edit")
                     job = create_proposal(store.project(scene_id), scene, selected[0]["id"], body.prompt, geometry_spec)
                     return {"status": "approval_required", "job": job, "planner": "geometry template"}
-                operations = await codex_plan(body.prompt, selected, scene)
-        assets = {item["path"] for item in list_assets(store.project(scene_id))}
-        validate_proposal(operations, scene, target_ids, assets,
-                          view["target_position"] if view is not None else None)
-        result = store.apply(scene_id, body.expected_revision, operations)
+                operations = await (claude_plan(body.prompt, selected, scene) if body.provider == "claude"
+                                    else codex_plan(body.prompt, selected, scene))
+        assets = valid_asset_paths(store.project(scene_id))
+        try:
+            validate_proposal(operations, scene, target_ids, assets,
+                              view["target_position"] if view is not None else None, generated_assets)
+            result = store.apply(scene_id, body.expected_revision, operations)
+        except Exception:
+            for asset in generated_assets:
+                (store.project(scene_id) / asset).unlink(missing_ok=True)
+            raise
         await connections.broadcast(scene_id, {"type": "delta", **result})
-        return {"planner": planner, "target_source": target_source, "operations": operations, **result}
+        return {"planner": planner, "target_source": target_source, "operations": operations,
+                "generated_designs": generated_designs, **result}
+
+    @app.get("/api/scenes/{scene_id}/asset-requests/{job_id}")
+    def get_asset_request(scene_id: str, job_id: str) -> dict:
+        store.read(scene_id)
+        return read_asset_request(store.project(scene_id), job_id)
+
+    @app.post("/api/scenes/{scene_id}/asset-requests/{job_id}/fulfill")
+    async def fulfill_asset_request(scene_id: str, job_id: str, body: FulfillAssetRequest) -> dict:
+        project = store.project(scene_id)
+        with store.lock:
+            scene, _ = store.read(scene_id)
+            job = read_asset_request(project, job_id)
+            if job["scene_id"] != scene_id or job["status"] != "needs_asset":
+                raise HTTPException(422, "Asset request is no longer open")
+            if scene["revision"] != body.expected_revision or scene["revision"] != job["revision"]:
+                raise HTTPException(409, "Scene changed since this asset was requested; request it again")
+            version = current_mesh(library_root, body.asset_id)
+            catalog_path = project / "catalog.json"
+            original_catalog = catalog_path.read_bytes() if catalog_path.is_file() else None
+            try:
+                catalog = json.loads(original_catalog) if original_catalog is not None else {}
+            except ValueError as exc:
+                raise HTTPException(500, "Project catalog is invalid") from exc
+            if not isinstance(catalog, dict) or not isinstance(catalog.get("assets", {}), dict):
+                raise HTTPException(500, "Project catalog is invalid")
+            asset, created = copy_version_to_project(project, version)
+            asset_key = Path(asset).stem
+            name = body.name or body.asset_id.replace("_", " ").replace("-", " ").title()
+            catalog.setdefault("assets", {})[asset_key] = {
+                "name": name, "walkable": False, "library_asset_id": body.asset_id,
+                "library_sha256": version["sha256"],
+            }
+            operation = generated_placement(asset, job["target_position"], name)
+            try:
+                write_json(catalog_path, catalog)
+                result = store.apply(scene_id, body.expected_revision, [operation])
+            except Exception:
+                if original_catalog is None:
+                    catalog_path.unlink(missing_ok=True)
+                else:
+                    catalog_path.write_bytes(original_catalog)
+                if created:
+                    (project / asset).unlink(missing_ok=True)
+                raise
+            job.update({"status": "complete", "asset_id": body.asset_id,
+                        "asset_sha256": version["sha256"], "project_asset": asset,
+                        "object_id": operation["object"]["id"]})
+            write_json(project / "jobs" / f"{job_id}.json", job)
+        await connections.broadcast(scene_id, {"type": "delta", **result})
+        return {"job": job, "operation": operation, **result}
 
     @app.get("/api/scenes/{scene_id}/geometry/{job_id}")
     def get_geometry_job(scene_id: str, job_id: str) -> dict:
@@ -189,12 +428,12 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         return history
 
     @app.get("/api/assets")
-    def get_assets(scene_id: str = "demo") -> list[dict]:
+    def get_assets(scene_id: str) -> list[dict]:
         store.read(scene_id)
         return list_assets(store.project(scene_id))
 
     @app.get("/api/assets/{asset_id}")
-    def get_asset(asset_id: str, scene_id: str = "demo") -> FileResponse:
+    def get_asset(asset_id: str, scene_id: str) -> FileResponse:
         store.read(scene_id)
         return FileResponse(asset_path(store.project(scene_id), asset_id), media_type="model/gltf-binary")
 

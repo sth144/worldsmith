@@ -1,0 +1,21 @@
+{
+  "asset": "assets/environment.glb",
+  "source": "fixture.glb",
+  "instances": [],
+  "presentation": {
+    "spawn": [
+      0,
+      1.8,
+      4
+    ],
+    "collision": {
+      "walkable": [
+        "floor",
+        "grid"
+      ],
+      "solid": [
+        "wall"
+      ]
+    }
+  }
+}

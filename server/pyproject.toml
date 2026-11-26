@@ -6,6 +6,10 @@ dependencies = ["fastapi>=0.115,<1", "uvicorn[standard]>=0.30,<1", "pydantic>=2.
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "httpx>=0.27,<1"]
+voice = [
+    "av<19",
+    "faster-whisper>=1.2,<2",
+]
 
 [build-system]
 requires = ["hatchling"]

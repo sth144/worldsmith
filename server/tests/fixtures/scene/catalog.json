@@ -1,0 +1,36 @@
+{
+  "assets": {
+    "chair": {
+      "name": "Chair",
+      "walkable": false
+    },
+    "table": {
+      "name": "Table",
+      "walkable": false
+    },
+    "planter": {
+      "name": "Planter",
+      "walkable": false
+    },
+    "lantern": {
+      "name": "Lantern",
+      "walkable": false
+    },
+    "hill": {
+      "name": "Hill",
+      "walkable": true
+    },
+    "tree": {
+      "name": "Tree",
+      "walkable": false
+    },
+    "tree-v-foliage1": {
+      "name": "Tree",
+      "walkable": false
+    },
+    "bird_statue": {
+      "name": "Bird statue",
+      "walkable": false
+    }
+  }
+}
