@@ -1,27 +1,85 @@
-# Architecture and roadmap
+# Architecture
 
-## Current vertical slice
+Worldsmith is a scene-creation harness: it coordinates asset requests, review, assembly, runtime editing, persistence, and export. It separates that platform behavior from scene content. A selected project's data defines its environment GLB, catalog assets, object graph, collision roles, material overrides, lighting, and player spawn. No scene or catalog is selected in application source.
 
-The client imports a self-contained GLB for visuals and keeps simple Godot `StaticBody3D` shapes alongside it for movement and teleportation. The visual GLB is not modified at runtime. The player uses a `CharacterBody3D`; its `XROrigin3D` owns the tracked camera and two tracked controllers. Desktop mode uses a separate camera on the same body. The floor is on collision layer 1 for teleport rays, while walls and the table are on layer 2. Placed prop selection shapes use layer 8; the player does not collide with them yet. The player collides with floor and walls. The Compatibility renderer uses screen-space ambient occlusion to define contact edges; one shadowless directional fill and merchant-specific shadowless interior lights make room geometry legible without modifying source assets. Quest frame rate with these effects needs device profiling.
+```mermaid
+flowchart LR
+    subgraph Data[Project-owned data]
+        Env[Environment GLB and presentation]
+        Catalog[Asset catalog and GLBs]
+        Graph[Object graph and edit history]
+    end
+    subgraph Platform[Scene-agnostic platform]
+        API[Scene package and asset API]
+        Store[Validated scene store]
+        Client[Godot desktop and OpenXR client]
+    end
+    Env --> API
+    Catalog --> API
+    Graph <--> Store
+    Store <--> API
+    API -->|Content hashes and downloads| Client
+    Client -->|Versioned edit operations| API
+```
 
-One world unit is one meter. Godot and glTF use Y up. The Blender generators take Y-up coordinates and map them to Blender's Z-up axes before GLB export. The sample assets are small and use simple materials to keep the initial draw count modest. Quest performance and comfort still need device verification.
+The project data selects what appears in a world. The platform applies the same loading, editing, saving, and rendering behavior to every project.
 
-The `WorldsmithSceneEditor` owns runtime placed objects and records each edit as a before/after snapshot keyed by a UUID. The inventory emits actions to the main client; a floor ray determines placement, while a separate ray on layer 8 selects placed objects. The desktop panel and headset panel invoke the same actions. `WorldsmithSceneSync` sends those edits over a WebSocket and keeps pending edits in memory until acknowledged. On reconnect, it loads the authoritative snapshot and reapplies pending edits. The same operation path serves REST and WebSocket callers.
+## Runtime
 
-The FastAPI server keeps `scene.json` and `history.json` in `data/projects/<scene_id>/`, copied initially from `projects/demo/`. Every write checks the expected revision and validates the full resulting scene. It atomically replaces the history file before the snapshot; if interrupted between the two writes, the server replays history on the next read and repairs the snapshot. History has a cursor for persistent undo/redo. WebSocket updates contain only changed objects. The base GLB environment remains in the client package for rendering, and a registered copy lives in server data for export; the JSON graph contains placed editable props. Runtime data is ignored by Git.
+The Godot client uses a `CharacterBody3D` for desktop and OpenXR locomotion. Local visual previews load a GLB selected by ignored preview configuration. Optional `overlays` load further aligned GLBs, so geometry layers can be authored and versioned separately. The client builds collision from mesh-name filters supplied in that configuration: `collision.walkable` creates teleportable layer 1 surfaces, and `collision.solid` creates layer 2 obstacles. `hidden_meshes` hides named meshes. Optional `materials` entries assign a shader and texture parameters to matching meshes; `sky`, `fog`, and `lights` configure presentation. Missing preview data means an empty workspace, not a built-in environment.
 
-## Current M4–M6 components
+A preview configuration has this shape; names and file paths are supplied by the scene author:
 
-1. **VR client:** spatial and desktop inventories, prompt entry, server synchronization, and runtime download of versioned GLBs.
-2. **Scene server:** authoritative scene graph, atomic snapshots, revision checks, history, WebSocket deltas, validated agent edits, geometry approvals, and export endpoints.
-3. **AI editing:** direct deterministic requests or read-only Codex CLI JSON proposals. A selected or aimed placed object can be edited. Placement requests add only catalog assets within five meters of a camera gaze point captured from floor collision; both paths use the same operation validator and scene store. The client retains the latest structured response for an optional desktop or spatial output panel.
-4. **Geometry:** fixed Blender scripts run only after approval against a copied asset in a temporary directory. A new immutable GLB version replaces the object's asset reference; previous versions remain for undo. Arbitrary generated scripts are disabled.
-5. **Export:** the registered base environment and visible scene objects are composed in Blender. The merchant preview's instance sidecars are included. A manifest records source hashes.
+```json
+{
+  "glb": "res://assets/local/<environment>.glb",
+  "overlays": ["res://assets/local/<geometry-layer>.glb"],
+  "spawn": [0, 1.8, 0],
+  "collision": {"walkable": ["<walkable-mesh-name>"], "solid": ["<solid-mesh-name>"]},
+  "hidden_meshes": [],
+  "materials": [{"mesh": "<mesh-name>", "shader": "res://assets/local/<shader>.gdshader", "textures": {}}],
+  "lights": [],
+  "sky": {},
+  "fog": {"enabled": true, "color": [0.7, 0.72, 0.73], "density": 0.005}
+}
+```
 
-Persistent objects use stable UUIDs, meter units, Y-up positions, and `(x, y, z, w)` quaternions. Client edits are optimistic, then reconciled to server revisions. Export maps Y-up transforms into Blender's Z-up space and GLB returns to Y-up.
+When connected, the client fetches `/api/scenes/<id>/package`. The package identifies a content-hashed environment GLB, optional repeated mesh groups, and presentation settings. The client caches and loads these at runtime. An unregistered scene opens empty. The client also fetches the selected scene's asset catalog and downloads missing GLBs into a scene-specific cache. Inventory pages are built from that catalog, so a new asset or scene needs no code edit. Placed objects have stable UUIDs and Y-up transforms in meters. `WorldsmithSceneEditor` records local edits; `WorldsmithSceneSync` queues them over a WebSocket and reconciles revisions on reconnect.
 
-## Current boundaries
+## Server and storage
 
-The sample collision layout is fixed. Local previews derive approximate collision from object names; stairs and stoops get walkable collision and step-up movement of up to 0.85 meters, while door leaves and frames have no collision so entrances stay usable. The merchant preview hides its closed gate leaves and hardware at runtime. Arbitrary meshes are not guaranteed to have usable collision or teleport surfaces. Physical room movement is tracked by OpenXR; the `CharacterBody3D` collision currently governs stick/keyboard locomotion, not every possible real-world head movement. Props can only be placed on floors recognized by the collision builder. Most prop collision shapes serve selection rather than blocking player movement; placed hills also have walkable mesh collision. Parented prop editing and Quest verification remain future work. Pending edits are held in memory and need an open client to reconnect. The LAN service has no authentication and must not be exposed to the Internet.
+The FastAPI server stores each scene under `data/projects/<scene_id>/`. A new install starts with no scenes. `POST /api/scenes` creates an empty scene. An optional `WORLDSMITH_SCENE_SEED` plus `WORLDSMITH_INITIAL_SCENE_ID` can initialize one from external data; those settings do not change application code. `catalog.json` lists assets offered for placement and optional display names and walkability. The server validates assets and operations before persisting them.
 
-For local `.blend` previews, `scripts/preview_blend.sh` exports a GLB under the ignored `client/assets/local/` directory. It bakes procedural base colors into textures and exports repeated Geometry Nodes meshes as compact transform data for Godot `MultiMesh`; this avoids thousands of separate scene nodes. The client creates temporary collision meshes for floor and structural objects based on their names. The `.blend` is never changed. This is a development preview, not a native Blender round trip. The M6 GLB can be imported into Blender, but preserving Blender-specific modifiers and collections would need a later operation-replay path into a copy of the source `.blend`. Base-environment meshes are not individually selectable for geometry edits. Geometry templates are fixed; no generated Python is executed, and the worker has no hardened OS sandbox. The service remains unauthenticated on a trusted LAN only. Quest frame rate, headset keyboard usability, and large dynamic asset behavior need device verification.
+`scene.json` is the current snapshot; `history.json` is an append-style edit history with a cursor for undo and redo. Writes atomically replace history before the snapshot. If interrupted between those writes, the next read replays history and repairs the snapshot. WebSocket messages send deltas or a fresh snapshot. The scene server is intended for a trusted LAN and currently has no authentication.
+
+A registered environment GLB is stored as project data for runtime loading and export. `scripts/register_environment.py` accepts any valid GLB, an explicit scene ID, and optional presentation settings. Those settings include spawn, collision roles, hidden meshes, sky, fog, and lights. The export worker composes the base environment and visible placed objects in Blender, then writes a source-hash manifest. Repeated mesh transforms can be carried in instance sidecars. The source Blender file is not modified by local preview or server export.
+
+## Asset production and review
+
+The reusable library is separate from any project catalog. A newly generated or revised file can be registered as a candidate without changing the current version. A reviewed version is promoted by its content hash; project data then chooses which version to use. For a new object, the client defaults to a reviewed-asset request: the server saves the prompt and viewed target without placing draft geometry. A promoted library mesh can fulfill that request and is copied into the project under a versioned name, added to its catalog, placed, and saved as one undoable edit. The user can explicitly choose quick draft shapes instead. A separate scene command mode asks the LLM for a bounded production brief and saves it under the selected project without changing the editable scene. That brief lists terrain, routes, visual direction, lighting, and reusable asset families. Automatic asset production, assembly from the brief, and headset quality review remain future capabilities.
+
+```mermaid
+flowchart LR
+    Prompt[Scene prompt] --> Request[Saved asset request and target]
+    Prompt --> Brief[Saved scene brief and asset list]
+    Brief -. planned asset families .-> Source
+    Request -. asset production .-> Source[Authored or generated source assets]
+    Source --> Candidate[Versioned candidate in library]
+    Candidate --> Cleanup[Blender cleanup, UVs, PBR bake, LOD and collision]
+    Cleanup --> Gate[GLB structure and device-budget checks]
+    Gate --> Review[Eye-level Godot and headset review]
+    Review -->|Accepted hash| Library[Promoted reusable asset]
+    Review -->|Needs work| Cleanup
+    Library --> Fulfill[Versioned library asset fulfillment]
+    Request --> Fulfill
+    Fulfill --> Assembly[Project-specific placement]
+    Brief -. planned layout .-> Assembly
+    Assembly --> Project[Environment, catalog and placements]
+    Project --> API[Scene package API]
+```
+
+Structural checks report estimated draw calls, triangle counts, and embedded texture bytes against caller-supplied budgets. They cannot establish visual quality; the render review decides whether a candidate meets the project's references.
+
+## Boundaries
+
+Collision names in a preview config are author supplied; arbitrary GLBs do not automatically become walkable. The client currently uses approximate triangle collision for configured surfaces and simple selection bounds for placed assets. A catalog entry can mark an asset as walkable. Physical headset movement follows OpenXR tracking, while stick and keyboard motion use the character collider. Blender-specific modifiers and shader graphs need export baking or a corresponding Godot shader. Quest performance, comfort, and visual parity require device testing.
