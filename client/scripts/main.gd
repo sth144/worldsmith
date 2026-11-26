@@ -496,6 +496,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 		match event.keycode:
+			KEY_P:
+				_open_prompt()
 			KEY_G:
 				_on_edit_action("move")
 			KEY_R:
@@ -763,6 +765,13 @@ func _set_inventory(value: bool) -> void:
 	_update_status()
 
 
+# Opens the AI prompt for whatever is under the crosshair, without going through the inventory.
+func _open_prompt() -> void:
+	inventory_view = _view_context()
+	inventory_focus_id = _object_under_ray()
+	_on_edit_action("scene_command")
+
+
 func _on_edit_action(action: String) -> void:
 	if view_only:
 		return
@@ -825,7 +834,7 @@ func _on_prompt_submitted(prompt: String, provider: String) -> void:
 			targets.append(selected_id)
 		scene_sync.request_agent(prompt, targets, prompt_view, prompt_target_id if selected_id.is_empty() else "", provider, prompt_panel.creation_mode)
 	else:
-		scene_sync.last_error = "Aim at a placed object or look at a floor point, then open AI command"
+		scene_sync.last_error = "Aim at a placed object or look at a floor point, then press P to prompt"
 		scene_sync.status_changed.emit()
 	_update_status()
 
@@ -1092,4 +1101,4 @@ func _update_status() -> void:
 		if not preview_name.is_empty():
 			title = scene_sync.scene_id if not scene_sync.scene_id.is_empty() else preview_name
 		var mode := "Placing " + placing_asset if not placing_asset.is_empty() else ("Moving " + selected_name if not moving_id.is_empty() else "Selected: " + selected_name)
-		status.text = "WORLDSMITH  •  %s  •  %s  •  %s\nH home  •  %s" % [title, mode, scene_sync.status_text(), "WASD move  •  Right mouse teleport" if view_only else "Tab inventory  •  Left click select/place  •  G move  •  R rotate  •  +/- scale  •  Delete remove"]
+		status.text = "WORLDSMITH  •  %s  •  %s  •  %s\nH home  •  %s" % [title, mode, scene_sync.status_text(), "WASD move  •  Right mouse teleport" if view_only else "P prompt  •  Tab inventory  •  Left click select/place  •  G move  •  R rotate  •  +/- scale  •  Delete remove"]

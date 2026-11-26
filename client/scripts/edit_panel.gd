@@ -4,7 +4,7 @@ class_name WorldsmithEditPanel
 signal action_requested(action: String)
 
 const COMMAND_ROWS := [
-	{"action": "scene_command", "label": "AI command…"},
+	{"action": "scene_command", "label": "Prompt the AI…"},
 	{"action": "ai_details", "label": "View AI output"},
 	{"action": "approve_geometry", "label": "Approve mesh edit"},
 ]
@@ -153,8 +153,12 @@ func _build_desktop_panel() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
 	desktop_panel = PanelContainer.new()
-	desktop_panel.position = Vector2(945, 145)
-	desktop_panel.custom_minimum_size = Vector2(310, 0)
+	# Pinned to the right edge so it stays on screen when the window is resized.
+	desktop_panel.anchor_left = 1.0
+	desktop_panel.anchor_right = 1.0
+	desktop_panel.offset_left = -335
+	desktop_panel.offset_right = -25
+	desktop_panel.offset_top = 145
 	desktop_panel.visible = false
 	layer.add_child(desktop_panel)
 	var rows := VBoxContainer.new()
