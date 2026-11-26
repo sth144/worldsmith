@@ -581,7 +581,7 @@ func status_text() -> String:
 	if not last_error.is_empty():
 		return "Sync error: " + last_error
 	if not asset_request_id.is_empty():
-		return "Asset requested"
+		return "Request saved, nothing placed yet"
 	if brief_ready:
 		return "Scene plan saved"
 	if online:
@@ -655,6 +655,7 @@ func _on_agent_result(result: int, code: int, _headers: PackedStringArray, body:
 				last_agent_details = _format_scene_brief(parsed)
 		if parsed is Dictionary and parsed.get("status") == "needs_asset":
 			asset_request_id = str(parsed.get("job", {}).get("id", ""))
+			last_agent_details = _format_asset_request(parsed.get("job", {}))
 		if parsed is Dictionary and parsed.get("status") == "approval_required":
 			var job: Dictionary = parsed["job"]
 			geometry_job_id = str(job["id"])
@@ -662,6 +663,21 @@ func _on_agent_result(result: int, code: int, _headers: PackedStringArray, body:
 	status_changed.emit()
 	if brief_ready and was_brief:
 		brief_result_ready.emit()
+
+
+# Says plainly that a request was saved and nothing was placed, and what to do next.
+func _format_asset_request(job: Dictionary) -> String:
+	return "\n".join([
+		"Request saved. Nothing has been placed in the scene.",
+		"",
+		"You asked for: " + str(job.get("prompt", "")),
+		"",
+		"This mode only places meshes that have been made and reviewed, and no mesh for this request exists yet. Nothing is building it automatically: someone, or an agent working in Blender, has to make it, add it to the asset library, and approve it. It can then be placed at the spot you were looking at.",
+		"",
+		"To see something straight away, send the prompt again with the second menu set to \"Quick draft shapes\". That places simple blockout geometry.",
+		"",
+		"Request ID: " + str(job.get("id", "")),
+	])
 
 
 func _format_scene_brief(document: Dictionary) -> String:
