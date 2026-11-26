@@ -1,7 +1,7 @@
 """Suggest, read, and save collision roles and a spawn point for a scene environment.
 
 An imported GLB has no collision data. This module measures each mesh from the
-GLB's own bounds, suggests which meshes are walkable ground or solid obstacles,
+GLB's bounds and a sample of its triangles, suggests which meshes are walkable ground or solid obstacles,
 and stores the roles a person confirms in the scene's presentation settings.
 """
 
@@ -16,6 +16,7 @@ from fastapi import HTTPException
 
 from .assets import glb_document
 from .export import _presentation_settings
+from .glb_triangles import Triangle, glb_binary, mesh_triangles
 from .history import write_json
 
 Matrix = list[float]  # 4x4, column-major, as in glTF
@@ -27,6 +28,11 @@ GROUND_HEIGHT_BAND = 0.25
 OBSTACLE_MIN_HEIGHT = 0.3
 SPAWN_DROP = 0.5
 SPAWN_CLEARANCE = 0.6
+GROUND_UP_SHARE = 0.4
+UP_FACING = 0.7  # about a 45 degree slope, the steepest the player can stand on
+MAX_MEASURED_MESHES = 300
+HEAD_ROOM = 2.2
+SPAWN_GRID = 128
 
 
 def _multiply(left: Matrix, right: Matrix) -> Matrix:
@@ -95,8 +101,37 @@ def mesh_bounds(document: dict) -> list[dict]:
         if not name or bounds is None:
             continue
         low, high = _transform_bounds(world, *bounds)
-        found.append({"name": runtime_name(str(name)), "min": low, "max": high})
+        found.append({"name": runtime_name(str(name)), "min": low, "max": high,
+                      "mesh": node["mesh"], "matrix": world})
     return found
+
+
+def _up_component(triangle: Triangle) -> tuple[float, float]:
+    """A triangle's area and how far its face normal points up, from -1 to 1."""
+    a, b, c = triangle
+    u = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+    v = (c[0] - a[0], c[1] - a[1], c[2] - a[2])
+    cross = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+    length = math.sqrt(cross[0] ** 2 + cross[1] ** 2 + cross[2] ** 2)
+    return (length / 2, cross[1] / length) if length > 0 else (0.0, 0.0)
+
+
+def _up_fraction(triangles: list[Triangle]) -> float | None:
+    """Share of a mesh's surface that faces up. Terrain and floors score high; trees and props low."""
+    total = up = 0.0
+    for triangle in triangles:
+        area, upward = _up_component(triangle)
+        total += area
+        if upward > UP_FACING:
+            up += area
+    return up / total if total > 0 else None
+
+
+def measure(document: dict, binary: bytes | None, meshes: list[dict]) -> None:
+    """Attach sampled triangles and the upward-facing share to each mesh, where readable."""
+    for mesh in sorted(meshes, key=_footprint, reverse=True)[:MAX_MEASURED_MESHES]:
+        mesh["triangles"] = mesh_triangles(document, binary, mesh["mesh"], mesh["matrix"])
+        mesh["up_fraction"] = _up_fraction(mesh["triangles"])
 
 
 def _footprint(mesh: dict) -> float:
@@ -108,9 +143,11 @@ def _height(mesh: dict) -> float:
 
 
 def _is_ground(mesh: dict, scene_low: float, scene_height: float, scene_footprint: float) -> bool:
-    """Ground is broad, low in the scene, and wider than it is tall."""
+    """Ground is broad, low in the scene, wider than it is tall, and mostly faces up."""
     width = max(mesh["max"][0] - mesh["min"][0], mesh["max"][2] - mesh["min"][2])
-    return (_footprint(mesh) >= GROUND_FOOTPRINT_SHARE * scene_footprint
+    up_share = mesh.get("up_fraction")
+    return ((up_share is None or up_share >= GROUND_UP_SHARE)
+            and _footprint(mesh) >= GROUND_FOOTPRINT_SHARE * scene_footprint
             and mesh["min"][1] <= scene_low + GROUND_HEIGHT_BAND * scene_height
             and _height(mesh) <= 0.5 * width)
 
@@ -163,6 +200,67 @@ def suggest_spawn(meshes: list[dict], roles: dict[str, str]) -> list[float]:
             round((ground["min"][2] + ground["max"][2]) / 2, 3)]
 
 
+def _cells(triangle: Triangle, cell: float) -> list[tuple[int, int]]:
+    """Grid cells under a triangle's bounds, seen from above."""
+    xs = [point[0] for point in triangle]
+    zs = [point[2] for point in triangle]
+    return [(column, row)
+            for column in range(math.floor(min(xs) / cell), math.floor(max(xs) / cell) + 1)
+            for row in range(math.floor(min(zs) / cell), math.floor(max(zs) / cell) + 1)]
+
+
+def _ground_heights(walkable: list[dict], cell: float) -> dict[tuple[int, int], float]:
+    heights: dict[tuple[int, int], float] = {}
+    for mesh in walkable:
+        for triangle in mesh.get("triangles", []):
+            if _up_component(triangle)[1] <= UP_FACING:
+                continue
+            top = max(point[1] for point in triangle)
+            for key in _cells(triangle, cell):
+                heights[key] = max(heights.get(key, -math.inf), top)
+    return heights
+
+
+def _blocked_cells(solid: list[dict], heights: dict, cell: float) -> set[tuple[int, int]]:
+    """Ground cells with something solid at body height. Branches overhead do not count."""
+    blocked = set()
+    for mesh in solid:
+        for triangle in mesh.get("triangles", []):
+            low = min(point[1] for point in triangle)
+            for key in _cells(triangle, cell):
+                if key in heights and low < heights[key] + HEAD_ROOM:
+                    blocked.add(key)
+    return blocked
+
+
+def survey_spawn(meshes: list[dict], roles: dict[str, str]) -> list[float] | None:
+    """An open patch of ground near the middle of the scene, found from real triangles."""
+    walkable = [mesh for mesh in meshes if roles.get(mesh["name"]) == "walkable"]
+    if not walkable:
+        return None
+    extent = max(max(mesh["max"][0] - mesh["min"][0], mesh["max"][2] - mesh["min"][2]) for mesh in walkable)
+    cell = max(1.0, extent / SPAWN_GRID)
+    heights = _ground_heights(walkable, cell)
+    blocked = _blocked_cells([mesh for mesh in meshes if roles.get(mesh["name"]) == "solid"], heights, cell)
+    neighbours = [(dx, dz) for dx in (-1, 0, 1) for dz in (-1, 0, 1)]
+    clear = [key for key in heights
+             if all((key[0] + dx, key[1] + dz) in heights and (key[0] + dx, key[1] + dz) not in blocked
+                    for dx, dz in neighbours)]
+    if not clear:
+        return None
+    centre_x = sum(key[0] for key in heights) / len(heights)
+    centre_z = sum(key[1] for key in heights) / len(heights)
+    best = min(clear, key=lambda key: (key[0] - centre_x) ** 2 + (key[1] - centre_z) ** 2)
+    return [round((best[0] + 0.5) * cell, 3), round(heights[best] + SPAWN_DROP, 3), round((best[1] + 0.5) * cell, 3)]
+
+
+def _measured_meshes(path: Path) -> list[dict]:
+    document = glb_document(path)
+    meshes = mesh_bounds(document)
+    measure(document, glb_binary(path), meshes)
+    return meshes
+
+
 def _matches(name: str, words: list[str]) -> bool:
     """Same rule as the client: a mesh takes a role when its name contains a listed name."""
     return any(word and word.lower() in name.lower() for word in words)
@@ -193,7 +291,7 @@ def has_walkable(project: Path) -> bool:
 def collision_review(project: Path) -> dict:
     """Every mesh with its size, suggested role, and current role, plus the spawn point."""
     manifest = _manifest(project)
-    meshes = mesh_bounds(glb_document(project / manifest["asset"]))
+    meshes = _measured_meshes(project / manifest["asset"])
     suggested = suggest_roles(meshes)
     presentation = manifest.get("presentation", {})
     collision = presentation.get("collision")
@@ -206,7 +304,7 @@ def collision_review(project: Path) -> dict:
             "suggested": suggested[name],
             "role": _saved_role(name, collision) if collision else suggested[name],
         })
-    suggested_spawn = suggest_spawn(meshes, suggested)
+    suggested_spawn = survey_spawn(meshes, suggested) or suggest_spawn(meshes, suggested)
     return {"reviewed": bool(collision), "meshes": rows,
             "spawn": presentation.get("spawn", suggested_spawn), "suggested_spawn": suggested_spawn}
 
