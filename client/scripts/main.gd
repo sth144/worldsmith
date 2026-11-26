@@ -532,6 +532,7 @@ func _physics_process(delta: float) -> void:
 			left_hand_was_active = left_active
 			_update_status()
 		_update_xr_panel_ray()
+		_process_xr_home()
 		_process_xr_input()
 		_process_xr_look(delta)
 	else:
@@ -554,6 +555,11 @@ func _process_desktop_look(delta: float) -> void:
 	mouse_pitch = clampf(mouse_pitch + pitch_input * KEYBOARD_PITCH_SPEED * delta, -1.45, 1.45)
 	player.rotation.y = mouse_yaw
 	desktop_camera.rotation.x = mouse_pitch
+
+
+func _process_xr_home() -> void:
+	if left_controller.is_button_pressed("menu_button"):
+		get_tree().change_scene_to_file("res://scenes/home.tscn")
 
 
 func _process_xr_input() -> void:
@@ -1079,7 +1085,7 @@ func _update_status() -> void:
 	if xr_active:
 		var mode := "PLACE" if not placing_asset.is_empty() else ("MOVE" if not moving_id.is_empty() else "VIEW")
 		var sticks := "L walk / R look" if left_controller.get_is_active() else "R walk"
-		xr_status.text = "Worldsmith  •  %s  •  Selected: %s  •  %s\n%s %s  •  Hold A or stick click: sprint  •  Tap A/X: walk toggle" % [mode, selected_name, scene_sync.status_text(), sticks, "ON" if smooth_locomotion else "OFF"]
+		xr_status.text = "Worldsmith  •  %s  •  Selected: %s  •  %s\n%s %s  •  Hold A or stick click: sprint  •  Tap A/X: walk toggle  •  Menu: home" % [mode, selected_name, scene_sync.status_text(), sticks, "ON" if smooth_locomotion else "OFF"]
 	else:
 		var title := preview_name if not preview_name.is_empty() else "EMPTY SCENE"
 		var mode := "Placing " + placing_asset if not placing_asset.is_empty() else ("Moving " + selected_name if not moving_id.is_empty() else "Selected: " + selected_name)

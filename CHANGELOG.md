@@ -16,6 +16,7 @@
 - Optional microphone transcription and review before sending scene commands.
 - Versioned geometry edits with explicit approval and portable scene export.
 - Quest build and deployment support.
+- A home screen on desktop and on a headset panel lists scenes and reusable assets, opens a scene to edit or run, and shows planned actions as not built yet.
 
 ### Fixed
 

@@ -12,7 +12,9 @@ For a local connected scene, use one command:
 ./scripts/run_local.sh
 ```
 
-It starts the local server if needed and opens the Worldsmith home screen. From there, create or import a scene, load one for editing, or run one with a registered 3D environment. You can pass a scene ID to preselect it: `./scripts/run_local.sh <scene_id>`. The home screen also manages reusable GLB imports, asset production requests, editing copies in Blender, and local connection settings. A scene plan saves a production brief; it does not yet generate a walkable 3D scene or assets.
+It starts the local server if needed and opens the Worldsmith home screen. From there, create or import a scene, load one for editing, or run one with a registered 3D environment. You can pass a scene ID to preselect it: `./scripts/run_local.sh <scene_id>`. The home screen also manages reusable GLB imports, asset production requests, editing copies in Blender, and local connection settings. A scene plan saves a production brief; it does not yet generate a walkable 3D scene or assets. Actions that are not built yet stay visible on the home screen, dimmed and labelled, so it shows the remaining work.
+
+On a Quest headset the same home screen appears on a floating panel. Point the right controller at it, pull the trigger to select, and tilt the right thumbstick to scroll. The headset can browse scenes and assets, open a scene to edit or run, and read a saved brief; creating, importing, planning, and settings need the desktop app. Inside a scene, the left controller's menu button returns home. To try the panel on the desktop with the mouse, run `./scripts/godot.sh --xr-mode off --path client -- --xr-home`.
 
 Imported scene GLBs need walkable collision settings before normal navigation can be trusted. Imported mesh assets enter the versioned local library with visual review pending. **Create Asset** records a production request; asset geometry generation and review are still manual.
 

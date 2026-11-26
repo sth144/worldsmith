@@ -15,6 +15,7 @@ func _capture() -> void:
 	var frames := 60
 	var allow_empty := false
 	var home := false
+	var home_panel := false
 	var home_dialog := ""
 	var home_view_brief := ""
 	var camera_position := ""
@@ -33,6 +34,10 @@ func _capture() -> void:
 			allow_empty = true
 		elif argument == "--home":
 			home = true
+		elif argument == "--home-panel":
+			# The headset home panel, shown through an ordinary camera.
+			home = true
+			home_panel = true
 		elif argument.begins_with("--home-dialog="):
 			home_dialog = argument.trim_prefix("--home-dialog=")
 		elif argument.begins_with("--home-view-brief="):
@@ -50,7 +55,8 @@ func _capture() -> void:
 	root.size = Vector2i(width, height)
 	if home:
 		root.gui_embed_subwindows = true
-	var packed: PackedScene = load("res://scenes/home.tscn" if home else "res://scenes/main.tscn")
+	var scene_path := "res://scenes/home_xr.tscn" if home_panel else ("res://scenes/home.tscn" if home else "res://scenes/main.tscn")
+	var packed: PackedScene = load(scene_path)
 	if packed == null:
 		push_error("Worldsmith main scene could not load")
 		quit(1)
@@ -78,6 +84,8 @@ func _capture() -> void:
 		camera.rotation.x = deg_to_rad(pitch)
 	for frame in range(frames):
 		await process_frame
+	if home_panel:
+		world = world.get("home")
 	if home and not home_view_brief.is_empty():
 		await create_timer(1.0).timeout
 		print("Home capture scenes: ", (world.get("scene_list") as ItemList).item_count)
@@ -86,7 +94,7 @@ func _capture() -> void:
 		world.call("_view_brief")
 		await create_timer(3.0).timeout
 		print("Home capture status: ", (world.get("status_label") as Label).text)
-		print("Home capture brief dialog: ", (world.get("brief_dialog") as AcceptDialog).visible)
+		print("Home capture brief panel: ", (world.get("brief_panel") as Control).visible)
 	if not home and not allow_empty and world.get_node_or_null("PreviewWorld") == null:
 		push_error("No preview world loaded")
 		quit(1)

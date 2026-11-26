@@ -4,6 +4,10 @@ const DEFAULT_SERVER := "ws://127.0.0.1:8765"
 const SETTINGS_PATH := "user://worldsmith-settings.cfg"
 const MAX_IMPORT_BYTES := 256 * 1024 * 1024
 
+# READY works everywhere. DESKTOP needs local files, a keyboard, or Blender.
+# PLANNED is shown so the home screen lays out the remaining work.
+enum Availability { READY, DESKTOP, PLANNED }
+
 var server_url := DEFAULT_SERVER
 var default_provider := "codex"
 var scenes: Array = []
@@ -16,8 +20,9 @@ var scene_details: Label
 var asset_details: Label
 var asset_request_label: Label
 var status_label: Label
-var brief_dialog: AcceptDialog
+var brief_panel: ColorRect
 var brief_text: TextEdit
+var panel_mode := false
 var create_dialog: ConfirmationDialog
 var create_id: LineEdit
 var asset_dialog: ConfirmationDialog
@@ -30,15 +35,21 @@ var settings_provider: OptionButton
 
 
 func _ready() -> void:
+	# The headset shows this same screen inside a SubViewport on a 3D panel.
+	panel_mode = get_viewport() is SubViewport
 	_load_settings()
 	var arguments := OS.get_cmdline_user_args()
-	if OS.has_feature("android") or arguments.has("--open-scene") or arguments.has("--offline") or _has_preview_arguments(arguments):
+	if arguments.has("--open-scene") or arguments.has("--offline") or _has_preview_arguments(arguments):
 		var selected := _argument_value(arguments, "--scene-id=")
 		if not selected.is_empty():
 			get_tree().root.set_meta("worldsmith_scene_id", selected)
 		get_tree().root.set_meta("worldsmith_server_url", server_url)
 		get_tree().change_scene_to_file("res://scenes/main.tscn")
 		return
+	if not panel_mode and (OS.has_feature("android") or arguments.has("--xr-home")):
+		get_tree().change_scene_to_file("res://scenes/home_xr.tscn")
+		return
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_build_interface()
 	call_deferred("_refresh_all")
 
@@ -58,6 +69,11 @@ func _argument_value(arguments: PackedStringArray, prefix: String) -> String:
 
 
 func _load_settings() -> void:
+	# A headset build cannot edit settings, so it uses the packaged server address.
+	if OS.has_feature("android") and FileAccess.file_exists("res://server.json"):
+		var packaged: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://server.json"))
+		if packaged is Dictionary:
+			server_url = str(packaged.get("url", server_url)).trim_suffix("/")
 	var settings := ConfigFile.new()
 	if settings.load(SETTINGS_PATH) == OK:
 		server_url = str(settings.get_value("connection", "server_url", DEFAULT_SERVER))
@@ -90,11 +106,12 @@ func _build_interface() -> void:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 	var settings_button := Button.new()
-	settings_button.text = "Settings"
+	settings_button.text = "Settings · desktop only" if panel_mode else "Settings"
+	settings_button.disabled = panel_mode
 	settings_button.pressed.connect(func() -> void: settings_dialog.popup_centered(Vector2i(520, 260)))
 	header.add_child(settings_button)
 	var intro := Label.new()
-	intro.text = "Create and manage scenes and reusable 3D assets. A production brief is a plan; walkability also requires 3D geometry and collision."
+	intro.text = "Create and manage scenes and reusable 3D assets. A production brief is a plan; walkability also requires 3D geometry and collision. Dimmed actions are not built yet or need the desktop app."
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	page.add_child(intro)
 	var columns := HBoxContainer.new()
@@ -114,12 +131,14 @@ func _build_interface() -> void:
 	var scene_actions := GridContainer.new()
 	scene_actions.columns = 2
 	scene_column.add_child(scene_actions)
-	_button(scene_actions, "Create Scene", func() -> void: create_dialog.popup_centered(Vector2i(520, 190)))
-	_button(scene_actions, "Import Scene", func() -> void: scene_file_dialog.popup_centered_ratio())
+	_button(scene_actions, "Create Scene", func() -> void: create_dialog.popup_centered(Vector2i(520, 190)), Availability.DESKTOP)
+	_button(scene_actions, "Import Scene", func() -> void: scene_file_dialog.popup_centered_ratio(), Availability.DESKTOP)
 	_button(scene_actions, "Load for Editing", func() -> void: _open_selected_scene(false))
 	_button(scene_actions, "Run Scene", func() -> void: _open_selected_scene(true))
-	_button(scene_actions, "Plan Scene", func() -> void: _plan_selected_scene())
+	_button(scene_actions, "Plan Scene", func() -> void: _plan_selected_scene(), Availability.DESKTOP)
 	_button(scene_actions, "View Brief", func() -> void: _view_brief())
+	_button(scene_actions, "Build from Brief", Callable(), Availability.PLANNED)
+	_button(scene_actions, "Review Collision", Callable(), Availability.PLANNED)
 	_button(scene_actions, "Refresh", func() -> void: _refresh_all())
 	var asset_column := _section(columns, "Reusable 3D assets")
 	asset_list = ItemList.new()
@@ -135,15 +154,18 @@ func _build_interface() -> void:
 	var asset_actions := GridContainer.new()
 	asset_actions.columns = 2
 	asset_column.add_child(asset_actions)
-	_button(asset_actions, "Create Asset", func() -> void: asset_dialog.popup_centered(Vector2i(520, 190)))
-	_button(asset_actions, "Import Asset", func() -> void: asset_file_dialog.popup_centered_ratio())
-	_button(asset_actions, "Edit Asset", func() -> void: _edit_selected_asset())
+	_button(asset_actions, "Request Asset", func() -> void: asset_dialog.popup_centered(Vector2i(520, 190)), Availability.DESKTOP)
+	_button(asset_actions, "Import Asset", func() -> void: asset_file_dialog.popup_centered_ratio(), Availability.DESKTOP)
+	_button(asset_actions, "Edit in Blender", func() -> void: _edit_selected_asset(), Availability.DESKTOP)
+	_button(asset_actions, "Generate Asset", Callable(), Availability.PLANNED)
+	_button(asset_actions, "Review and Promote", Callable(), Availability.PLANNED)
 	_button(asset_actions, "Refresh", func() -> void: _refresh_all())
 	status_label = Label.new()
 	status_label.text = "Connecting to the local server…"
 	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	page.add_child(status_label)
 	_build_dialogs()
+	_build_brief_panel()
 
 
 func _section(parent: HBoxContainer, heading: String) -> VBoxContainer:
@@ -164,12 +186,20 @@ func _section(parent: HBoxContainer, heading: String) -> VBoxContainer:
 	return column
 
 
-func _button(parent: Control, label: String, handler: Callable) -> void:
+func _button(parent: Control, label: String, handler: Callable, availability := Availability.READY) -> Button:
 	var button := Button.new()
 	button.text = label
-	button.custom_minimum_size = Vector2(180, 38)
-	button.pressed.connect(handler)
+	button.custom_minimum_size = Vector2(250, 38)
+	if availability == Availability.PLANNED:
+		button.text += " · not built yet"
+		button.disabled = true
+	elif availability == Availability.DESKTOP and panel_mode:
+		button.text += " · desktop only"
+		button.disabled = true
+	else:
+		button.pressed.connect(handler)
 	parent.add_child(button)
+	return button
 
 
 func _build_dialogs() -> void:
@@ -183,7 +213,7 @@ func _build_dialogs() -> void:
 	create_dialog.confirmed.connect(_create_scene)
 	add_child(create_dialog)
 	asset_dialog = ConfirmationDialog.new()
-	asset_dialog.title = "Create Asset"
+	asset_dialog.title = "Request Asset"
 	var asset_rows := _dialog_rows(asset_dialog)
 	asset_rows.add_child(_field_label("Save an asset production request. Geometry is not automatic yet."))
 	asset_prompt = LineEdit.new()
@@ -218,16 +248,35 @@ func _build_dialogs() -> void:
 	settings_rows.add_child(settings_provider)
 	settings_dialog.confirmed.connect(_save_settings)
 	add_child(settings_dialog)
-	brief_dialog = AcceptDialog.new()
-	brief_dialog.title = "Scene production brief"
+
+
+# The brief opens in the page, not a popup window, so it also works on the headset panel.
+func _build_brief_panel() -> void:
+	brief_panel = ColorRect.new()
+	brief_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	brief_panel.color = Color(0.055, 0.075, 0.105)
+	brief_panel.visible = false
+	add_child(brief_panel)
+	var padding := MarginContainer.new()
+	padding.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	for side in ["left", "top", "right", "bottom"]:
+		padding.add_theme_constant_override("margin_" + side, 30)
+	brief_panel.add_child(padding)
+	var rows := VBoxContainer.new()
+	rows.add_theme_constant_override("separation", 12)
+	padding.add_child(rows)
+	var heading := Label.new()
+	heading.text = "Scene production brief"
+	heading.add_theme_font_size_override("font_size", 23)
+	rows.add_child(heading)
 	brief_text = TextEdit.new()
-	brief_text.position = Vector2(20, 45)
-	brief_text.custom_minimum_size = Vector2(650, 435)
+	brief_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	brief_text.editable = false
 	brief_text.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	brief_text.add_theme_color_override("font_readonly_color", Color(0.93, 0.95, 0.98))
-	brief_dialog.add_child(brief_text)
-	add_child(brief_dialog)
+	rows.add_child(brief_text)
+	var close := _button(rows, "Back to Home", func() -> void: brief_panel.visible = false)
+	close.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 
 
 func _dialog_rows(dialog: ConfirmationDialog) -> VBoxContainer:
@@ -264,6 +313,8 @@ func _api(path: String, method: HTTPClient.Method = HTTPClient.METHOD_GET, paylo
 		return {"ok": false, "message": "Could not connect to scene server"}
 	var response: Array = await request.request_completed
 	request.queue_free()
+	if int(response[0]) != HTTPRequest.RESULT_SUCCESS:
+		return {"ok": false, "message": "Could not reach the scene server at " + _http_base()}
 	var code := int(response[1])
 	var parsed: Variant = JSON.parse_string((response[3] as PackedByteArray).get_string_from_utf8())
 	if code < 200 or code >= 300:
@@ -488,7 +539,7 @@ func _view_brief() -> void:
 	for item in brief.get("assets", []):
 		lines.append("• %s ×%d (%s): %s" % [item.get("key", ""), item.get("quantity", 1), item.get("role", ""), item.get("description", "")])
 	brief_text.text = "\n".join(lines)
-	brief_dialog.popup_centered(Vector2i(700, 550))
+	brief_panel.visible = true
 
 
 func _open_selected_scene(view_only: bool) -> void:

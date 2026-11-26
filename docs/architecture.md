@@ -26,7 +26,9 @@ The project data selects what appears in a world. The platform applies the same 
 
 ## Runtime
 
-The Godot client uses a `CharacterBody3D` for desktop and OpenXR locomotion. Local visual previews load a GLB selected by ignored preview configuration. Optional `overlays` load further aligned GLBs, so geometry layers can be authored and versioned separately. The client builds collision from mesh-name filters supplied in that configuration: `collision.walkable` creates teleportable layer 1 surfaces, and `collision.solid` creates layer 2 obstacles. `hidden_meshes` hides named meshes. Optional `materials` entries assign a shader and texture parameters to matching meshes; `sky`, `fog`, and `lights` configure presentation. Missing preview data means an empty workspace, not a built-in environment.
+The client opens on a home screen that lists the server's scenes and reusable assets. It is one `Control` scene: the desktop shows it in the window, and the headset hosts it in a `SubViewport` on a panel, converting the controller ray into pointer events. Actions that need local files or a keyboard are disabled on the panel, and planned actions are shown disabled on both.
+
+Inside a scene, the Godot client uses a `CharacterBody3D` for desktop and OpenXR locomotion. Local visual previews load a GLB selected by ignored preview configuration. Optional `overlays` load further aligned GLBs, so geometry layers can be authored and versioned separately. The client builds collision from mesh-name filters supplied in that configuration: `collision.walkable` creates teleportable layer 1 surfaces, and `collision.solid` creates layer 2 obstacles. `hidden_meshes` hides named meshes. Optional `materials` entries assign a shader and texture parameters to matching meshes; `sky`, `fog`, and `lights` configure presentation. Missing preview data means an empty workspace, not a built-in environment.
 
 A preview configuration has this shape; names and file paths are supplied by the scene author:
 
