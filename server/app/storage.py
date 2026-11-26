@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from .assets import glb_material_names, valid_asset_paths, valid_scene_id
+from .collision import has_walkable
 from .history import history_status, replay, write_json
 from .scene import SceneDocument, SceneError, apply_operation
 
@@ -55,6 +56,7 @@ class SceneStore:
                     "revision": scene["revision"],
                     "object_count": len(scene["objects"]),
                     "has_environment": (project / "environment.json").is_file(),
+                    "has_walkable": has_walkable(project),
                     "has_brief": (project / "brief.json").is_file(),
                 })
         return entries

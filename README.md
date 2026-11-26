@@ -16,7 +16,7 @@ It starts the local server if needed and opens the Worldsmith home screen. From 
 
 On a Quest headset the same home screen appears on a floating panel. Point the right controller at it, pull the trigger to select, and tilt the right thumbstick to scroll. The headset can browse scenes and assets, open a scene to edit or run, and read a saved brief; creating, importing, planning, and settings need the desktop app. Inside a scene, the left controller's menu button returns home. To try the panel on the desktop with the mouse, run `./scripts/godot.sh --xr-mode off --path client -- --xr-home`.
 
-Imported scene GLBs need walkable collision settings before normal navigation can be trusted. Imported mesh assets enter the versioned local library with visual review pending. **Create Asset** records a production request; asset geometry generation and review are still manual.
+An imported scene GLB has no collision, so **Run Scene** stays blocked until you use **Review Collision**. The review lists each mesh with a suggested role (walkable ground, solid obstacle, or none) and a suggested spawn point; select a mesh to change its role, then save. The suggestions come from mesh sizes only, so check them, and walk the scene afterward. Imported mesh assets enter the versioned local library with visual review pending. **Create Asset** records a production request; asset geometry generation and review are still manual.
 
 ```sh
 uv run --project server uvicorn app.main:app --host 127.0.0.1 --port 8765

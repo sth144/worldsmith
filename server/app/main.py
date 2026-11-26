@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from .assets import asset_path, glb_material_names, list_assets, valid_asset_paths, validate_glb, valid_scene_id
 from .asset_requests import AssetLibrary, copy_version_to_project, create_asset_request, current_mesh, read_asset_request
 from .agent import claude_plan, claude_view_plan, codex_plan, codex_view_plan, creative_view_plan, deterministic_plan, deterministic_view_plan, generated_placement, is_creation_request, is_placement_request, resolve_aimed_target, validate_proposal
+from .collision import collision_review, save_collision
 from .export import export_scene, register_environment, scene_instance_path, scene_package, source_manifest
 from .geometry import create_proposal, interpret_geometry, read_job, run_geometry
 from .procedural import build_assets, validate_designs
@@ -44,6 +45,12 @@ class BriefRequest(BaseModel):
 
 class LibraryRequest(BaseModel):
     prompt: str = Field(min_length=10, max_length=1000)
+
+
+class CollisionRoles(BaseModel):
+    walkable: list[str] = Field(max_length=1024)
+    solid: list[str] = Field(default_factory=list, max_length=1024)
+    spawn: list[float] = Field(min_length=3, max_length=3)
 
 
 class OperationBatch(BaseModel):
@@ -172,6 +179,17 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             raise HTTPException(422, str(exc)) from exc
         finally:
             path.unlink(missing_ok=True)
+
+    @app.get("/api/scenes/{scene_id}/collision")
+    def get_scene_collision(scene_id: str) -> dict:
+        store.read(scene_id)
+        return collision_review(store.project(scene_id))
+
+    @app.put("/api/scenes/{scene_id}/collision")
+    def put_scene_collision(scene_id: str, body: CollisionRoles) -> dict:
+        store.read(scene_id)
+        with store.lock:
+            return save_collision(store.project(scene_id), body.walkable, body.solid, body.spawn)
 
     @app.get("/api/library/assets")
     def list_library_assets() -> list[dict]:

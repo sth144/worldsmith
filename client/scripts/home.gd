@@ -23,6 +23,7 @@ var status_label: Label
 var brief_panel: ColorRect
 var brief_text: TextEdit
 var panel_mode := false
+var collision_review: WorldsmithCollisionReview
 var create_dialog: ConfirmationDialog
 var create_id: LineEdit
 var asset_dialog: ConfirmationDialog
@@ -138,7 +139,7 @@ func _build_interface() -> void:
 	_button(scene_actions, "Plan Scene", func() -> void: _plan_selected_scene(), Availability.DESKTOP)
 	_button(scene_actions, "View Brief", func() -> void: _view_brief())
 	_button(scene_actions, "Build from Brief", Callable(), Availability.PLANNED)
-	_button(scene_actions, "Review Collision", Callable(), Availability.PLANNED)
+	_button(scene_actions, "Review Collision", func() -> void: _review_collision())
 	_button(scene_actions, "Refresh", func() -> void: _refresh_all())
 	var asset_column := _section(columns, "Reusable 3D assets")
 	asset_list = ItemList.new()
@@ -166,6 +167,9 @@ func _build_interface() -> void:
 	page.add_child(status_label)
 	_build_dialogs()
 	_build_brief_panel()
+	collision_review = WorldsmithCollisionReview.new(_api)
+	collision_review.closed.connect(_on_collision_review_closed)
+	add_child(collision_review)
 
 
 func _section(parent: HBoxContainer, heading: String) -> VBoxContainer:
@@ -366,8 +370,7 @@ func _refresh_all() -> void:
 	scenes = scene_result["data"]
 	scene_list.clear()
 	for item in scenes:
-		var suffix := " · 3D source" if item["has_environment"] else (" · planned" if item["has_brief"] else " · empty")
-		var index := scene_list.add_item(str(item["scene_id"]) + suffix)
+		var index := scene_list.add_item(str(item["scene_id"]) + " · " + _scene_state(item))
 		scene_list.set_item_metadata(index, str(item["scene_id"]))
 	var asset_result := await _api("/api/library/assets")
 	if not asset_result["ok"]:
@@ -420,9 +423,37 @@ func _on_scene_selected(index: int) -> void:
 	selected_scene = str(scene_list.get_item_metadata(index))
 	for item in scenes:
 		if item["scene_id"] == selected_scene:
-			var state := "environment registered" if item["has_environment"] else ("brief saved; geometry pending" if item["has_brief"] else "empty project")
-			scene_details.text = "%s · revision %d · %d objects" % [state, item["revision"], item["object_count"]]
+			scene_details.text = "%s · revision %d · %d objects" % [_scene_state(item), item["revision"], item["object_count"]]
 			return
+
+
+func _scene_state(item: Dictionary) -> String:
+	if item["has_walkable"]:
+		return "walkable"
+	if item["has_environment"]:
+		return "3D source, collision not reviewed"
+	return "planned, geometry pending" if item["has_brief"] else "empty"
+
+
+func _selected_scene_item() -> Dictionary:
+	for item in scenes:
+		if item["scene_id"] == selected_scene:
+			return item
+	return {}
+
+
+func _review_collision() -> void:
+	if not bool(_selected_scene_item().get("has_environment", false)):
+		status_label.text = "Select a scene with a 3D environment first. Import Scene adds one."
+		return
+	collision_review.open(selected_scene)
+
+
+func _on_collision_review_closed(message: String) -> void:
+	if message.is_empty():
+		return
+	await _refresh_all()
+	status_label.text = message
 
 
 func _on_asset_selected(index: int) -> void:
@@ -475,7 +506,11 @@ func _import_scene(path: String) -> void:
 	var uploaded := await _upload("/api/scenes/" + scene_id + "/environment", bytes, path.get_file())
 	selected_scene = scene_id
 	await _refresh_all()
-	status_label.text = "Imported scene GLB. Review its walkable collision before running." if uploaded["ok"] else "Scene project created, but GLB import failed: " + str(uploaded["message"])
+	if not uploaded["ok"]:
+		status_label.text = "Scene project created, but GLB import failed: " + str(uploaded["message"])
+		return
+	status_label.text = "Imported scene GLB. Review its collision to make it walkable."
+	collision_review.open(scene_id)
 
 
 func _import_asset(path: String) -> void:
@@ -546,13 +581,13 @@ func _open_selected_scene(view_only: bool) -> void:
 	if selected_scene.is_empty():
 		status_label.text = "Select a scene first."
 		return
-	var has_environment := false
-	for item in scenes:
-		if item["scene_id"] == selected_scene:
-			has_environment = bool(item["has_environment"])
-			break
+	var item := _selected_scene_item()
+	var has_environment := bool(item.get("has_environment", false))
 	if view_only and not has_environment:
 		status_label.text = "This scene has no 3D environment to run. Plan or import it first."
+		return
+	if view_only and not bool(item.get("has_walkable", false)):
+		status_label.text = "This scene has no walkable collision yet. Use Review Collision first."
 		return
 	_enter_scene(view_only, not has_environment, false)
 
