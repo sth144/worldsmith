@@ -464,8 +464,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		player.rotation.y = mouse_yaw
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_H:
-			get_tree().change_scene_to_file("res://scenes/home.tscn")
 			get_viewport().set_input_as_handled()
+			get_tree().change_scene_to_file("res://scenes/home.tscn")
 			return
 		if view_only:
 			return
