@@ -48,8 +48,8 @@ class LibraryRequest(BaseModel):
 
 
 class CollisionRoles(BaseModel):
-    walkable: list[str] = Field(max_length=1024)
-    solid: list[str] = Field(default_factory=list, max_length=1024)
+    walkable: list[str] = Field(max_length=4096)
+    solid: list[str] = Field(default_factory=list, max_length=4096)
     spawn: list[float] = Field(min_length=3, max_length=3)
 
 

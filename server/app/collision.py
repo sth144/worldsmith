@@ -22,7 +22,7 @@ from .history import write_json
 Matrix = list[float]  # 4x4, column-major, as in glTF
 IDENTITY: Matrix = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
 ROLES = ("walkable", "solid", "none")
-MAX_MESHES = 1024
+MAX_MESHES = 4096
 GROUND_FOOTPRINT_SHARE = 0.2
 GROUND_HEIGHT_BAND = 0.25
 OBSTACLE_MIN_HEIGHT = 0.3

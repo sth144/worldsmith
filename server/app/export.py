@@ -57,7 +57,7 @@ def _presentation_settings(settings: dict) -> dict:
         clean_collision = {}
         for key in ("walkable", "solid"):
             names = collision.get(key, [])
-            if not isinstance(names, list) or len(names) > 1024 or any(
+            if not isinstance(names, list) or len(names) > 4096 or any(
                 not isinstance(name, str) or not 1 <= len(name) <= 128 for name in names
             ):
                 raise ValueError(f"collision.{key} must be an array of mesh names")
