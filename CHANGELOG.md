@@ -12,6 +12,7 @@
 - A reusable Blender scene authoring skill, a local asset library, and generic GLB quality checks support a range of visual styles and environments.
 - Asset revisions can be stored as candidates before promotion, and GLB checks report draw calls, triangles, and embedded texture size against optional budgets.
 - Desktop and OpenXR navigation, selection, placement, transform tools, undo and redo, and persistent scene synchronization.
+- Jump with Space on desktop or the left grip on a headset, for ledges too high to step onto.
 - Natural language commands for selected objects and viewed locations, with deterministic catalog placement, validated agent proposals, and generated geometry.
 - Optional microphone transcription and review before sending scene commands.
 - Versioned geometry edits with explicit approval and portable scene export.

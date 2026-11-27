@@ -3,6 +3,7 @@ extends Node3D
 const WALK_SPEED := 2.3
 const SPRINT_MULTIPLIER := 2.0
 const MAX_STEP_HEIGHT := 0.85
+const JUMP_SPEED := 4.6  # clears a little over one meter
 const TELEPORT_RANGE := 15.0
 const MOUSE_SENSITIVITY := 0.002
 const KEYBOARD_YAW_SPEED := 1.8
@@ -671,10 +672,20 @@ func _process_movement(delta: float) -> void:
 	player.velocity.z = move_direction.z * speed
 	player.velocity.y -= 9.8 * delta
 	var was_on_floor := player.is_on_floor()
+	if was_on_floor and _jump_pressed():
+		player.velocity.y = JUMP_SPEED
 	var before := player.global_position
 	player.move_and_slide()
 	if was_on_floor and not move_direction.is_zero_approx():
 		_try_step_up(before, move_direction, speed * delta)
+
+
+func _jump_pressed() -> bool:
+	if edit_panel.is_open or prompt_panel.is_open:
+		return false
+	if xr_active:
+		return left_controller.get_is_active() and left_controller.is_button_pressed("grip_click")
+	return Input.is_key_pressed(KEY_SPACE)
 
 
 func _try_step_up(before: Vector3, direction: Vector3, travel: float) -> void:
@@ -1104,10 +1115,10 @@ func _update_status() -> void:
 	if xr_active:
 		var mode := "PLACE" if not placing_asset.is_empty() else ("MOVE" if not moving_id.is_empty() else "VIEW")
 		var sticks := "L walk / R look" if left_controller.get_is_active() else "R walk"
-		xr_status.text = "Worldsmith  •  %s  •  Selected: %s  •  %s\n%s %s  •  Hold A or stick click: sprint  •  Tap A/X: walk toggle  •  Menu: home" % [mode, selected_name, _sync_status(), sticks, "ON" if smooth_locomotion else "OFF"]
+		xr_status.text = "Worldsmith  •  %s  •  Selected: %s  •  %s\n%s %s  •  Hold A or stick click: sprint  •  Tap A/X: walk toggle  •  Left grip: jump  •  Menu: home" % [mode, selected_name, _sync_status(), sticks, "ON" if smooth_locomotion else "OFF"]
 	else:
 		var title := "EMPTY SCENE"
 		if not preview_name.is_empty():
 			title = scene_sync.scene_id if not scene_sync.scene_id.is_empty() else preview_name
 		var mode := "Placing " + placing_asset if not placing_asset.is_empty() else ("Moving " + selected_name if not moving_id.is_empty() else "Selected: " + selected_name)
-		status.text = "WORLDSMITH  •  %s  •  %s  •  %s\nH home  •  %s" % [title, mode, _sync_status(), "WASD move  •  Right mouse teleport" if view_only else "P prompt  •  O AI reply  •  Tab inventory  •  Left click select/place  •  G move  •  R rotate  •  +/- scale  •  Delete remove"]
+		status.text = "WORLDSMITH  •  %s  •  %s  •  %s\nH home  •  %s" % [title, mode, _sync_status(), "WASD move  •  Space jump  •  Right mouse teleport" if view_only else "Space jump  •  P prompt  •  O AI reply  •  Tab inventory  •  Left click select/place  •  G move  •  R rotate  •  +/- scale  •  Delete remove"]
