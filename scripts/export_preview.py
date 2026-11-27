@@ -177,6 +177,12 @@ def main():
                 if shader and any(needs_bake(shader, name) for name in ("Base Color", "Roughness", "Normal")):
                     bake_targets.append((object_, index))
     for object_, index in bake_targets:
+        # Baking needs a selectable object; renderable ones can be hidden in the viewport.
+        object_.hide_viewport = False
+        object_.hide_set(False)
+        if not object_.visible_get():
+            print(f"WORLDSMITH skipped {object_.name}: not in the view layer, cannot bake")
+            continue
         bake_material(object_, index)
     bpy.ops.export_scene.gltf(
         filepath=str(output),
